@@ -1,0 +1,1 @@
+After running it, a browser will pop up and directly open the library webpage. Once you log in, find the exam papers you want to download. After clicking browse, the files will be automatically saved to your desktop.
