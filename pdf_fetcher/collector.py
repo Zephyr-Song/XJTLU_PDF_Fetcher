@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 from playwright.async_api import Browser, BrowserContext, Response, async_playwright
@@ -23,6 +24,12 @@ from playwright.async_api import Browser, BrowserContext, Response, async_playwr
 from .config import Config
 from .detector import Candidate, extract_filename, is_real_pdf, looks_like_pdf_response
 from .storage import human_size, save_bytes
+
+# 回调签名：on_log 接收一行日志，on_candidate 接收新收集到的候选
+LogFn = Callable[[str], None]
+CandidateFn = Callable[["Candidate"], None]
+ProgressFn = Callable[[int, int, str], None]
+
 
 # ---------------------------------------------------------------- 浏览器启动
 
@@ -55,10 +62,24 @@ async def _launch_with_fallback(playwright, config: Config) -> tuple[Browser, st
 class Collector:
     """在浏览器里浏览时，把遇到的 PDF 候选 URL 收集起来（不下载）。"""
 
-    def __init__(self, config: Config) -> None:
+    def __init__(
+        self,
+        config: Config,
+        on_log: LogFn | None = None,
+        on_candidate: CandidateFn | None = None,
+    ) -> None:
         self.config = config
         self._seen: dict[str, Candidate] = {}
         self._skipped = 0
+        self._on_log = on_log
+        self._on_candidate = on_candidate
+
+    def _log(self, msg: str) -> None:
+        """统一出口：有回调走回调（GUI），没有就打印（CLI）。"""
+        if self._on_log:
+            self._on_log(msg)
+        else:
+            print(msg)
 
     def _on_response(self, response: Response) -> None:
         """网络响应回调 —— 必须是同步函数，不能 await（Playwright 会丢失事件）。"""
@@ -83,10 +104,9 @@ class Collector:
 
             if candidate.key not in self._seen:
                 self._seen[candidate.key] = candidate
-                print(
-                    f"  [+] 收集 #{len(self._seen)}: {candidate.hint}"
-                    f"  ({len(url)} 字符 URL)"
-                )
+                self._log(f"  [+] 收集 #{len(self._seen)}: {candidate.hint}")
+                if self._on_candidate:
+                    self._on_candidate(candidate)
         except Exception:  # noqa: BLE001 - 单个响应出错不能中断整个收集
             return
 
@@ -111,19 +131,21 @@ class Collector:
                 candidate = Candidate(url=url, hint=extract_filename(url), source="dom")
                 if candidate.key not in self._seen:
                     self._seen[candidate.key] = candidate
-                    print(f"  [+] 收集 #{len(self._seen)}: {candidate.hint}  (DOM)")
+                    self._log(f"  [+] 收集 #{len(self._seen)}: {candidate.hint}  (DOM)")
+                    if self._on_candidate:
+                        self._on_candidate(candidate)
 
     async def run(self) -> list[Candidate]:
         async with async_playwright() as p:
             browser, label = await _launch_with_fallback(p, self.config)
-            print(f"\n浏览器已启动: {label}")
+            self._log(f"\n浏览器已启动: {label}")
 
             context = await browser.new_context()
             context.on("response", self._on_response)
 
             page = await context.new_page()
 
-            print(f"\n正在打开: {self.config.start_url}")
+            self._log(f"\n正在打开: {self.config.start_url}")
             try:
                 await page.goto(
                     self.config.start_url,
@@ -131,18 +153,11 @@ class Collector:
                     timeout=self.config.page_timeout_ms,
                 )
             except Exception as exc:  # noqa: BLE001 - 超时也允许继续手动操作
-                print(f"页面加载提示: {type(exc).__name__}（可继续手动操作）")
+                self._log(f"页面加载提示: {type(exc).__name__}（可继续手动操作）")
 
-            print(
-                "\n"
-                + "=" * 62
-                + "\n  收集模式已开启 —— 现在请手动操作浏览器：\n"
-                "    1. 登录 ETD（如需）\n"
-                "    2. 进入课程页面，逐个点开你想下载的试卷\n"
-                "    3. 随便翻、随便点，脚本只记录不下载，很快\n"
-                "    4. 全部点完后，直接关闭浏览器窗口\n"
-                + "=" * 62
-                + "\n"
+            self._log(
+                "收集模式已开启：请在浏览器里登录并逐个点开试卷，"
+                "全部点完后关闭浏览器窗口。"
             )
 
             # 等待用户关闭浏览器（所有页面都关掉）
@@ -157,9 +172,9 @@ class Collector:
             except Exception:  # noqa: BLE001
                 pass
 
-            print(f"\n收集结束：共 {len(self._seen)} 个候选")
+            self._log(f"\n收集结束：共 {len(self._seen)} 个候选")
             if self.config.verbose:
-                print(f"（另有 {self._skipped} 个非 PDF 响应被跳过）")
+                self._log(f"（另有 {self._skipped} 个非 PDF 响应被跳过）")
 
             return list(self._seen.values())
 
@@ -167,32 +182,59 @@ class Collector:
 # ---------------------------------------------------------------- 下载阶段
 
 
-async def download_all(candidates: list[Candidate], config: Config) -> int:
-    """复用同一 context 的 cookie 批量下载。返回成功数量。"""
+async def download_all(
+    candidates: list[Candidate],
+    config: Config,
+    on_log: LogFn | None = None,
+    on_progress: ProgressFn | None = None,
+    should_stop: Callable[[], bool] | None = None,
+) -> int:
+    """复用同一 context 的 cookie 批量下载。返回成功数量。
+
+    on_log(msg)                   —— 每行日志
+    on_progress(done, total, msg) —— 进度（GUI 用进度条）
+    should_stop()                 —— 返回 True 时在下一个文件前中断
+    """
+
+    def log(msg: str) -> None:
+        if on_log:
+            on_log(msg)
+        else:
+            print(msg)
+
     if not candidates:
-        print("没有候选可下载。")
+        log("没有候选可下载。")
         return 0
 
     out_dir = config.resolved_output_dir
-    print(f"\n开始批量下载 {len(candidates)} 个文件 → {out_dir}\n")
+    log(f"开始批量下载 {len(candidates)} 个文件 → {out_dir}")
 
     ok = 0
+    total = len(candidates)
+
     async with async_playwright() as p:
         browser, _ = await _launch_with_fallback(p, config)
         context = await browser.new_context()
 
         for index, cand in enumerate(candidates, start=1):
-            prefix = f"[{index}/{len(candidates)}]"
+            if should_stop and should_stop():
+                log("已取消下载。")
+                break
+
+            prefix = f"[{index}/{total}]"
+            if on_progress:
+                on_progress(index - 1, total, cand.hint)
+
             try:
                 resp = await context.request.get(cand.url, timeout=config.page_timeout_ms)
                 if not resp.ok:
-                    print(f"{prefix} 跳过（HTTP {resp.status}）: {cand.hint}")
+                    log(f"{prefix} 跳过（HTTP {resp.status}）: {cand.hint}")
                     continue
 
                 body = await resp.body()
                 if not is_real_pdf(body):
                     # 收集阶段是宽进策略，这里严格校验后丢弃误收的
-                    print(f"{prefix} 跳过（非 PDF 文件头）: {cand.hint}")
+                    log(f"{prefix} 跳过（非 PDF 文件头）: {cand.hint}")
                     continue
 
                 filename = extract_filename(
@@ -210,13 +252,15 @@ async def download_all(candidates: list[Candidate], config: Config) -> int:
                         target_dir = out_dir / code
 
                 path = save_bytes(target_dir, filename, body)
-                print(f"{prefix} 已保存 {path.name}  ({human_size(len(body))})")
+                log(f"{prefix} 已保存 {path.name}  ({human_size(len(body))})")
                 ok += 1
 
             except Exception as exc:  # noqa: BLE001 - 单个失败不影响整批
-                print(f"{prefix} 失败（{type(exc).__name__}）: {cand.hint}")
+                log(f"{prefix} 失败（{type(exc).__name__}）: {cand.hint}")
 
+        if on_progress:
+            on_progress(total, total, "")
         await browser.close()
 
-    print(f"\n完成：成功 {ok} / {len(candidates)}")
+    log(f"完成：成功 {ok} / {total}")
     return ok

@@ -51,6 +51,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--url", type=str, default=None,
                    help="起始页面（默认 ETD 首页）")
     p.add_argument("-v", "--verbose", action="store_true", help="打印跳过的响应")
+    p.add_argument("--gui", action="store_true", help="打开图形界面（点按钮操作）")
     return p
 
 
@@ -138,6 +139,12 @@ async def run_async(args: argparse.Namespace) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+
+    if args.gui:
+        from .gui import main as gui_main
+
+        return gui_main()
+
     try:
         return asyncio.run(run_async(args))
     except KeyboardInterrupt:
