@@ -13,6 +13,12 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
+    # 注意：secrets 上下文在 steps[*].if 里不可用（会让整个工作流文件被判为非法），
+    # 所以统一在这里声明成 env，步骤里再用 env.xxx 判断。
+    env:
+      SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+      CODESIGN_PFX: ${{ secrets.CODESIGN_PFX }}
+      CODESIGN_PASSWORD: ${{ secrets.CODESIGN_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
 
@@ -30,6 +36,80 @@ jobs:
       - name: Build EXE
         run: pyinstaller build_exe.spec --noconfirm
 
+      # ---------------- 代码签名（可选，未配置时自动跳过） ----------------
+
+      - name: Upload unsigned EXE for signing
+        if: ${{ env.SIGNPATH_API_TOKEN != '' }}
+        id: upload-unsigned
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-exe
+          path: dist/XJTLU_PDF_Fetcher.exe
+          if-no-files-found: error
+
+      - name: Sign EXE with SignPath
+        # 开源免费代码签名（SignPath Foundation 签发 OV 证书，私钥存于其 HSM）。
+        # 需要仓库 Secrets / Variables：
+        #   SIGNPATH_API_TOKEN            —— SignPath 控制台生成的 API token
+        #   SIGNPATH_ORGANIZATION_ID      —— 组织 ID（Variables）
+        #   SIGNPATH_PROJECT_SLUG         —— 项目 slug（Variables）
+        #   SIGNPATH_SIGNING_POLICY_SLUG  —— 签名策略 slug（Variables）
+        #   SIGNPATH_ARTIFACT_CONFIG_SLUG —— 产物配置 slug（Variables）
+        # 未配置时自动跳过。免费计划每次发版需在 SignPath 门户人工点一次 Approve。
+        if: ${{ env.SIGNPATH_API_TOKEN != '' }}
+        id: signpath
+        continue-on-error: true
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ env.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_ARTIFACT_CONFIG_SLUG }}
+          github-artifact-id: ${{ steps.upload-unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: signed
+
+      - name: Fetch signed EXE
+        if: ${{ env.SIGNPATH_API_TOKEN != '' }}
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ steps.signpath.outputs.signing-request-id }}
+          path: signed
+
+      - name: Replace EXE with signed one
+        if: ${{ env.SIGNPATH_API_TOKEN != '' }}
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $signed = Get-ChildItem -Path "signed" -Filter *.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($signed) {
+            Copy-Item $signed.FullName "dist/XJTLU_PDF_Fetcher.exe" -Force
+            Write-Host "Signed EXE copied into dist/"
+          } else {
+            Write-Host "No signed EXE found, keeping the unsigned build."
+          }
+
+      - name: Sign EXE with own certificate
+        # 备选路径：如果你有自购的代码签名证书（PFX），走这个步骤。
+        # 需要两个仓库 Secrets：CODESIGN_PFX（base64 的 PFX）、CODESIGN_PASSWORD。
+        # 与 SignPath 步骤互斥：SignPath 已启用时不再重复签。
+        if: ${{ env.CODESIGN_PFX != '' && env.SIGNPATH_API_TOKEN == '' }}
+        continue-on-error: true
+        run: |
+          $ErrorActionPreference = "Stop"
+          $pfx = "cert.pfx"
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:CODESIGN_PFX))
+          $signtool = Get-ChildItem -Path "C:\Program Files (x86)\Windows Kits\10\bin", "C:\Program Files\Windows Kits\10\bin" -Recurse -Filter signtool.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $signtool) { throw "signtool.exe not found on runner" }
+          & $signtool.FullName sign /f $pfx /p $env:CODESIGN_PASSWORD /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 "dist/XJTLU_PDF_Fetcher.exe"
+          if ($LASTEXITCODE -ne 0) { throw "signtool sign failed" }
+
+      # ---------------- 打包与上传 ----------------
+
       - name: Package zip (exe + guide + unblock script)
         # 额外打一个 zip：里面是 exe + 中文使用说明 + 一键解除锁定脚本。
         # 用户用 7-Zip/WinRAR 解压通常不会带上 Mark-of-the-Web 标记，
@@ -46,51 +126,6 @@ jobs:
             Out-File "$stage/使用说明.txt" -Encoding utf8BOM
           Compress-Archive -Path "$stage/*" -DestinationPath "dist/XJTLU_PDF_Fetcher-win-x64.zip" -Force
           Get-ChildItem "dist" | Select-Object Name, Length
-
-      - name: Sign EXE with SignPath
-        # 开源免费代码签名（SignPath Foundation 签发 OV 证书，私钥存于其 HSM）。
-        # 需要仓库 Secrets / Variables：
-        #   SIGNPATH_API_TOKEN              —— SignPath 控制台生成的 API token
-        #   SIGNPATH_ORGANIZATION_ID        —— 组织 ID（可放 Variables）
-        #   SIGNPATH_PROJECT_SLUG           —— 项目 slug
-        #   SIGNPATH_SIGNING_POLICY_SLUG    —— 签名策略 slug
-        #   SIGNPATH_ARTIFACT_CONFIG_SLUG   —— 产物配置 slug
-        # 未配置时此步自动跳过，构建照常产出未签名 exe。
-        # 注意：免费计划每次发版需在 SignPath 门户人工点一次 Approve，
-        #       下面的 wait-for-completion 会等这次审批（超时 60 分钟）。
-        if: ${{ secrets.SIGNPATH_API_TOKEN != '' }}
-        uses: signpath/github-action-submit-signing-request@v1
-        env:
-          SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
-        with:
-          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
-          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
-          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
-          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
-          artifact-configuration-slug: ${{ vars.SIGNPATH_ARTIFACT_CONFIG_SLUG }}
-          input-artifact-path: dist/XJTLU_PDF_Fetcher.exe
-          output-artifact-path: dist/XJTLU_PDF_Fetcher.exe
-          wait-for-completion: true
-          wait-for-completion-timeout-in-seconds: 3600
-
-      - name: Sign EXE with own certificate
-        # 备选路径：如果你有自购的代码签名证书（PFX），走这个步骤。
-        # 需要两个仓库 Secrets：
-        #   CODESIGN_PFX       —— 证书（含私钥）的 base64 编码 PFX
-        #   CODESIGN_PASSWORD  —— PFX 的密码
-        # 与 SignPath 步骤互斥：SignPath 已启用时不再重复签。
-        if: ${{ secrets.CODESIGN_PFX != '' && secrets.SIGNPATH_API_TOKEN == '' }}
-        env:
-          CODESIGN_PFX: ${{ secrets.CODESIGN_PFX }}
-          CODESIGN_PASSWORD: ${{ secrets.CODESIGN_PASSWORD }}
-        run: |
-          $ErrorActionPreference = "Stop"
-          $pfx = "cert.pfx"
-          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:CODESIGN_PFX))
-          $signtool = Get-ChildItem -Path "C:\Program Files (x86)\Windows Kits\10\bin", "C:\Program Files\Windows Kits\10\bin" -Recurse -Filter signtool.exe -ErrorAction SilentlyContinue | Select-Object -First 1
-          if (-not $signtool) { throw "signtool.exe not found on runner" }
-          & $signtool.FullName sign /f $pfx /p $env:CODESIGN_PASSWORD /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 "dist/XJTLU_PDF_Fetcher.exe"
-          if ($LASTEXITCODE -ne 0) { throw "signtool sign failed" }
 
       - name: Upload to Release
         if: github.event_name == 'release'
