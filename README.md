@@ -348,12 +348,6 @@ playwright install chromium
 
 ---
 
-## 致谢
-
-两阶段收集的思路受 [kevinlasnh/xjtlu-final-paper-pdf-downloader](https://github.com/kevinlasnh/xjtlu-final-paper-pdf-downloader) 启发（同校同学的项目）。本项目在实现上走了不同路线：用网络层特征匹配替代 DOM 解析，用两阶段解耦替代自动遍历。代码为独立实现。
-
----
-
 ## 代码签名政策（Code signing policy）
 
 Free code signing provided by [SignPath.io](https://signpath.io), certificate by [SignPath Foundation](https://signpath.org).
