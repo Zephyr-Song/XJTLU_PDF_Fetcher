@@ -53,6 +53,22 @@ def main() -> int:
     from pdf_fetcher.detector import Candidate
     from pdf_fetcher.gui import CHECKED, UNCHECKED, App
 
+    # messagebox 是模态对话框，会阻塞在等人点击上。测试里换成记录调用的假实现，
+    # 既不弹窗，也能在最后断言「确实弹过完成提示」。
+    from pdf_fetcher import gui as gui_mod
+
+    dialogs: list[tuple[str, str]] = []
+
+    def _fake_dialog(kind: str):
+        def _fn(title: str = "", message: str = "", **_: object) -> None:
+            dialogs.append((kind, f"{title} | {message}"))
+
+        return _fn
+
+    gui_mod.messagebox.showinfo = _fake_dialog("info")
+    gui_mod.messagebox.showwarning = _fake_dialog("warning")
+    gui_mod.messagebox.showerror = _fake_dialog("error")
+
     print("\n[1] 窗口构建")
     try:
         app = App()
@@ -115,6 +131,10 @@ def main() -> int:
         app.msg.put(("downloaded", 2))
         pump(app, times=5)
         check("完成后按钮恢复", str(app.btn_collect["state"]), "normal")
+        check_true(
+            "弹过完成提示",
+            any(kind == "info" and "2" in text for kind, text in dialogs),
+        )
 
         print("\n[5] 消息泵容错")
         app.msg.put(("unknown_kind", None))   # 未知消息不应导致崩溃

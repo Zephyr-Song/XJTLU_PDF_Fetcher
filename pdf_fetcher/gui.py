@@ -21,6 +21,7 @@ from tkinter import filedialog, messagebox, ttk
 from .collector import Collector, download_all, _launch_with_fallback  # noqa: F401
 from .config import Config
 from .detector import Candidate
+from .paths import desktop_dir
 
 CHECKED = "☑"
 UNCHECKED = "☐"
@@ -100,7 +101,7 @@ class App(tk.Tk):
         )
 
         ttk.Label(top, text="保存到").grid(row=1, column=0, sticky="w", **pad)
-        self.var_out = tk.StringVar(value=str(Path.home() / "Desktop"))
+        self.var_out = tk.StringVar(value=str(desktop_dir()))
         ttk.Entry(top, textvariable=self.var_out).grid(row=1, column=1, sticky="ew", **pad)
         ttk.Button(top, text="浏览…", width=8, command=self._choose_dir).grid(
             row=1, column=2, **pad

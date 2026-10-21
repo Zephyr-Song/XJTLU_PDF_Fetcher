@@ -278,6 +278,22 @@ ETD 的 PDF 链接带 `timestamp` / `signature` 参数，**同一份试卷每次
 
 `detector.Candidate.key` 只用 URL 的 path 部分作为去重键（`/browserfile/abc123`），忽略所有 query 参数。这样同一份试卷无论打开几次，只会下载一次。
 
+### 输出目录：系统「真实」的桌面
+
+默认保存到桌面，但**不是**简单地拼 `Path.home()/"Desktop"` —— 那样在开了 OneDrive「备份桌面」或被组策略重定向的机器上，会把文件下载进一个用户根本看不见的影子目录。
+
+这里走三层解析，逐级兜底：
+
+```
+SHGetKnownFolderPath(FOLDERID_DesktopDirectory)   ← 系统标准做法，尊重重定向
+  ↓ 失败
+注册表 HKCU\...\Explorer\User Shell Folders\Desktop  ← 重定向后该值同样是真实路径
+  ↓ 失败
+Path.home() / "Desktop"
+```
+
+> 注意用的是 `FOLDERID_DesktopDirectory` 而不是 `FOLDERID_Desktop`：后者是「桌面」这个虚拟命名空间的根，不对应磁盘上的真实文件夹，对它调用会返回 `E_FILE_NOT_FOUND`。
+
 ---
 
 ## 已知限制

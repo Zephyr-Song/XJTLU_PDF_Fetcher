@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .paths import default_output_dir
+
 
 @dataclass
 class Config:
@@ -39,7 +41,9 @@ class Config:
     def resolved_output_dir(self) -> Path:
         if self.output_dir:
             return Path(self.output_dir).expanduser().resolve()
-        return (Path.home() / "Desktop").resolve()
+        # 用 Known Folder API 拿真实桌面，避免 OneDrive / 组策略重定向时
+        # 下载进用户看不见的影子目录
+        return default_output_dir()
 
 
 DEFAULT_CONFIG = Config()

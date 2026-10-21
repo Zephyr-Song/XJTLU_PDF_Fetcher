@@ -11,6 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from pdf_fetcher.config import Config  # noqa: E402
 from pdf_fetcher.detector import (  # noqa: E402
     Candidate,
     extract_filename,
@@ -20,6 +21,7 @@ from pdf_fetcher.detector import (  # noqa: E402
     looks_like_pdf_response,
     sanitize_filename,
 )
+from pdf_fetcher.paths import desktop_dir  # noqa: E402
 from pdf_fetcher.storage import human_size, resolve_save_path, save_bytes  # noqa: E402
 
 PASSED: list[str] = []
@@ -210,6 +212,25 @@ def test_course_code() -> None:
     check("纯数字不算", guess_course_code("https://x/20260101.pdf"), "")
 
 
+# ---------------------------------------------------------------- 路径解析
+
+def test_paths() -> None:
+    print("\n[6] 路径解析（真实桌面 / 默认输出目录）")
+
+    desk = desktop_dir()
+    check_true("desktop_dir 返回 Path", isinstance(desk, Path))
+    check_true("desktop_dir 是绝对路径", desk.is_absolute())
+    check_true("desktop_dir 名为 Desktop", desk.name.lower() == "desktop")
+    check_true("desktop_dir 存在", desk.exists())
+
+    # 默认输出目录必须等于真实桌面
+    check("默认输出目录 = 桌面", Config().resolved_output_dir, desk)
+
+    # 显式指定时以指定为准
+    tmp = Path(tempfile.gettempdir())
+    check("显式输出目录优先", Config(output_dir=tmp).resolved_output_dir, tmp.resolve())
+
+
 def main() -> int:
     print("=" * 62)
     print("XJTLU PDF Fetcher · 核心逻辑测试")
@@ -220,6 +241,7 @@ def main() -> int:
     test_filename()
     test_storage()
     test_course_code()
+    test_paths()
 
     print("\n" + "=" * 62)
     print(f"通过 {len(PASSED)} 项，失败 {len(FAILED)} 项")
