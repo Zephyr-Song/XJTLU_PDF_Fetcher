@@ -1,10 +1,24 @@
 # XJTLU PDF Fetcher
 
+[![GitHub Release](https://img.shields.io/github/v/release/Zephyr-Song/XJTLU_PDF_Fetcher?label=下载%20exe&color=blue)](https://github.com/Zephyr-Song/XJTLU_PDF_Fetcher/releases/latest)
+
 批量下载 XJTLU ETD（Theses and Dissertations Database）里你**有权限访问**的历年试卷 PDF。
 
 > **核心设计：先收集，后批量下载。**
 > 你在浏览器里点开试卷页面时，脚本只把 URL 记下来（不下载）；全部点完后关掉浏览器，脚本一次性批量下载。
 > 手动操作从「点一份存一份」变成「点一遍、然后走开」。
+
+---
+
+## ⏬ 不会用命令行？下载 exe 版（推荐）
+
+不想装 Python、不想碰 git？直接下载打包好的单文件程序，**双击就能用**：
+
+1. 打开本仓库的 **[Releases](https://github.com/Zephyr-Song/XJTLU_PDF_Fetcher/releases/latest)** 页面
+2. 在 **Assets** 里下载 `XJTLU_PDF_Fetcher.exe`
+3. 双击运行 → 用自己的账号登录 ETD → 点开试卷 → 关浏览器 → 自动下载
+
+> exe 只是把本工具打包成免安装程序，**仍然只复用你自己的 ETD 登录态**，试卷留在你本机、不对外分发。下面的使用须知同样适用。
 
 ---
 
@@ -71,7 +85,7 @@ playwright install chromium
 python main.py --gui
 ```
 
-Windows 上也可以直接双击 **`run_gui.bat`**。
+Windows 上也可以直接双击 **`run_gui.bat`**。嫌装环境麻烦的话，直接用上面 Releases 里的 `XJTLU_PDF_Fetcher.exe`，连 Python 都不用装。
 
 界面长这样：
 
