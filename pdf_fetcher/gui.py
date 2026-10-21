@@ -18,7 +18,7 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from .collector import Collector, download_all, _launch_with_fallback  # noqa: F401
+from .collector import Collector, download_all  # noqa: F401
 from .config import Config
 from .detector import Candidate
 from .paths import desktop_dir
@@ -285,7 +285,8 @@ class App(tk.Tk):
         self.progress["value"] = 0
         self._set_busy(True, "收集中…")
         self._append_log("—— 开始收集 ——")
-        self._append_log("浏览器打开后请登录并逐个点开试卷，全部点完关闭浏览器窗口。")
+        self._append_log("浏览器打开后请登录 ETD（首次需登录，之后自动复用），")
+        self._append_log("然后逐个点开试卷，全部点完直接关闭浏览器窗口。")
 
         self.worker.submit(self._collect_task(self._make_config()))
 

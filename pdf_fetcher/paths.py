@@ -20,6 +20,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -118,3 +119,15 @@ def desktop_dir() -> Path:
 def default_output_dir() -> Path:
     """默认下载目录：桌面。"""
     return desktop_dir()
+
+
+def default_profile_dir() -> Path:
+    """浏览器 profile 目录（存放 ETD 登录态的独立用户数据目录）。
+
+    放在用户配置目录下，不要放程序所在目录 —— 免得随 exe 一起被删掉，
+    也避免写进 Program Files 之类没有权限的地方。
+    """
+    if sys.platform == "win32":
+        base = os.environ.get("LOCALAPPDATA") or (Path.home() / "AppData" / "Local")
+        return Path(base) / "XJTLU_PDF_Fetcher" / "browser-profile"
+    return Path.home() / ".xjtlupdf_fetcher" / "browser-profile"

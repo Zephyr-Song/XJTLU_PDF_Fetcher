@@ -205,11 +205,12 @@ python main.py -v
 | 参数 | 说明 |
 |---|---|
 | `-o, --output` | 输出目录（默认桌面） |
-| `--group-by-course` | 按课程代码（如 `CAN201`）建子目录 |
+| `--group-by-course` | 按课程代码（如 `CAN201`）建子目录。课程代码优先从**文件名**取，其次从 URL 的查询参数取 —— 路径里的 `/browserfile/<hash>` 是哈希不是课程代码，认不出来就平铺存放 |
 | `--from-file FILE` | 从文本文件读 URL 列表下载，每行一个，`#` 开头为注释 |
 | `--collect-only` | 只收集不下载；配合 `-o` 把 URL 写入文件 |
 | `--no-auto-download` | 收集后打印 URL 但不下载 |
 | `--channel` | `msedge` / `chrome` / `chromium`，默认按顺序自动尝试 |
+| `--profile-dir` | 浏览器 profile 目录（存放 ETD 登录态），默认 `%LOCALAPPDATA%\XJTLU_PDF_Fetcher\browser-profile` |
 | `--headless` | 无头模式（需要登录时不可用） |
 | `--url` | 起始页面，默认 ETD 首页 |
 | `--gui` | 打开图形界面（等价于双击 `run_gui.bat`） |
@@ -264,13 +265,32 @@ ETD 前端是 SPA（首页只有 2KB 的空壳，内容全由前端异步渲染�
 
 **这是一个刻意的取舍**：放弃了「一键全自动」，换来了「不会因为改版而失效」。
 
-### 三层浏览器兜底
+### 三层浏览器兜底 + 持久化登录态
 
 ```
 msedge  →  chrome  →  playwright 内置 chromium
 ```
 
-优先用系统浏览器，是因为你的登录态、客户端证书、企业代理配置都在系统浏览器里。**用内置 Chromium 往往要重新走一次完整登录流程。**
+用系统浏览器程序，是为了继承你的客户端证书、企业代理配置与安全策略。
+
+但真正决定「要不要重复登录」的是**运行模式**：本工具用 `launch_persistent_context` 跑在一个**独立 profile 目录**里（默认 `%LOCALAPPDATA%\XJTLU_PDF_Fetcher\browser-profile`），不是临时 profile。
+
+于是：
+
+- **第一次**使用时，在弹出的窗口里登录一次 ETD，状态就存下来了
+- **之后每次**运行都自动带上这份登录态，不用再登
+- 收集阶段和下载阶段共用同一个 profile，所以批量下载时带着同一份 cookie，不会被 ETD 拒掉
+- 用的是独立 profile，不会和你日常浏览的 Edge/Chrome 打架（profile 被占用时也开得了）
+
+> 早期版本用 `browser.new_context()`，每次都是全新临时 profile —— 所以每次都要重新登录，而且下载阶段会丢掉 cookie。这两点都已修掉。
+
+### 收集阶段：为什么必须在这个窗口里点
+
+工具靠**监听网络响应**发现试卷 —— 浏览器真的去请求那个 PDF，工具才抓得到 URL。
+
+所以点开试卷必须发生在**工具打开的那个浏览器窗口**里。在你自己日常用的浏览器里点，工具看不到那些请求，也就收集不到任何东西。
+
+这也是本工具**没有**做成"输入课程代码自动遍历"的原因：那需要解析 ETD 的接口或 DOM 结构，ETD 换个前端就废。想在自己浏览器里点，就得改用浏览器扩展方案（另说）。
 
 ### 去重：为什么要归一化 URL
 
@@ -301,6 +321,8 @@ Path.home() / "Desktop"
 | 限制 | 说明 |
 |---|---|
 | **需要手动点开每份试卷** | 脚本不主动遍历课程列表。原因见上：SPA 结构不稳定，宁可慢一点，也不要出一个改版就废掉的工具 |
+| **必须在这个工具打开的浏览器窗口里点** | 靠网络层监听发现试卷，在你自己日常浏览器里点，工具看不到那些请求 |
+| **第一次要登录一次** | 登录态存在独立 profile 里（`%LOCALAPPDATA%\XJTLU_PDF_Fetcher\browser-profile`），之后自动复用。删掉那个目录就会需要重登 |
 | **URL 带签名，会过期** | 收集阶段拿到的链接含 `timestamp` / `signature`，过一段时间就失效。`--collect-only` 存下的列表建议尽快用掉 |
 | **分片加载的 PDF 收不到** | 如果试卷用 canvas 逐页渲染或分片请求，不会有单个完整的 PDF 响应，本工具无法处理 |
 | **只能下载你有权限的** | 完全复用你的登录态，没有任何越权手段 |
@@ -317,15 +339,16 @@ XJTLU_PDF_Fetcher/
 ├── requirements.txt
 ├── pdf_fetcher/
 │   ├── config.py              # 所有可调参数
-│   ├── detector.py            # PDF 识别 / 文件名处理（纯函数）
+│   ├── detector.py            # PDF 识别 / 文件名 / 课程代码（纯函数）
 │   ├── storage.py             # 落盘与重名处理
+│   ├── paths.py               # 真实桌面 / 浏览器 profile 目录解析
 │   ├── collector.py           # 两阶段核心（收集 + 下载）
 │   ├── gui.py                 # Tkinter 图形界面
 │   └── cli.py                 # 命令行
 └── tests/
-    ├── test_core.py           # 49 项纯逻辑测试（无需浏览器）
+    ├── test_core.py           # 65 项纯逻辑测试（无需浏览器）
     ├── test_integration.py    # 12 项端到端测试（本地 HTTP 服务）
-    └── test_gui.py            # 26 项界面测试（需 tkinter）
+    └── test_gui.py            # 27 项界面测试（需 tkinter）
 ```
 
 设计上把**所有能纯函数化的逻辑都抽出来了**（`detector.py` / `storage.py`），所以大部分行为可以不起浏览器就验证。GUI 通过消息队列与后台线程通信 —— Tkinter 不是线程安全的，所有界面更新都必须在主线程做。

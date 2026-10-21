@@ -46,6 +46,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--channel", type=str, default=None,
                    choices=["msedge", "chrome", "chromium"],
                    help="指定浏览器通道（默认自动尝试 Edge → Chrome → 内置）")
+    p.add_argument("--profile-dir", type=str, default=None, metavar="DIR",
+                   help="浏览器 profile 目录（存放 ETD 登录态，默认在用户配置目录下）")
     p.add_argument("--headless", action="store_true",
                    help="无头模式（注意：需要登录时无法手动输入账号密码）")
     p.add_argument("--url", type=str, default=None,
@@ -73,6 +75,8 @@ def config_from_args(args: argparse.Namespace) -> Config:
         cfg.browser_channels = (
             (None,) if args.channel == "chromium" else (args.channel, None)
         )
+    if args.profile_dir:
+        cfg.profile_dir = Path(args.profile_dir)
     return cfg
 
 
