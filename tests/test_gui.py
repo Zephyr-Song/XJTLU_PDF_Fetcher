@@ -117,7 +117,31 @@ def main() -> int:
         app._set_all(True)
         check("全选", len(app._selected()), 2)
 
-        print("\n[3] 进度与日志")
+        print("\n[3] 收集阶段的按钮状态")
+        app._phase = "collect"
+        app._set_busy(True, "收集中…")
+        check("收集按钮变为「结束收集」", str(app.btn_collect["text"]), "■ 结束收集")
+        check("收集中收集按钮仍可点", str(app.btn_collect["state"]), "normal")
+        check("收集中下载按钮仍禁用", str(app.btn_download["state"]), "disabled")
+        check("收集中取消按钮可用", str(app.btn_cancel["state"]), "normal")
+
+        # 没有后台 collector 时点「结束收集」不能崩
+        app._on_collect()
+        pump(app, times=2)
+        check_true("无 collector 时结束收集不崩溃", True)
+
+        app.msg.put(("collected", [c1, c2]))
+        pump(app)
+        check("收集完成后按钮回到「开始收集」", str(app.btn_collect["text"]), "① 开始收集")
+        check("下载按钮带数量", str(app.btn_download["text"]), "② 下载选中 (2)")
+        check("下载按钮已解锁", str(app.btn_download["state"]), "normal")
+
+        app._set_all(False)
+        check("全不选后下载按钮置灰", str(app.btn_download["state"]), "disabled")
+        app._set_all(True)
+        check("重新全选后恢复", str(app.btn_download["state"]), "normal")
+
+        print("\n[4] 进度与日志")
         app.msg.put(("progress", (3, 10, "试卷A.pdf")))
         pump(app, times=5)
         check("进度条当前值", int(app.progress["value"]), 3)
@@ -127,7 +151,7 @@ def main() -> int:
         pump(app, times=5)
         check_true("日志写入", "测试日志" in app.log.get("1.0", "end"))
 
-        print("\n[4] 完成态")
+        print("\n[5] 完成态")
         app.msg.put(("downloaded", 2))
         pump(app, times=5)
         check("完成后按钮恢复", str(app.btn_collect["state"]), "normal")
@@ -136,7 +160,7 @@ def main() -> int:
             any(kind == "info" and "2" in text for kind, text in dialogs),
         )
 
-        print("\n[5] 消息泵容错")
+        print("\n[6] 消息泵容错")
         app.msg.put(("unknown_kind", None))   # 未知消息不应导致崩溃
         pump(app, times=3)
         check_true("未知消息被忽略", True)

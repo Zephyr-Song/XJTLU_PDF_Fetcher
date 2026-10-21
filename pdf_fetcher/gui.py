@@ -79,6 +79,8 @@ class App(tk.Tk):
         self.checked: dict[str, bool] = {}     # key -> 是否勾选
         self.busy = False
         self._cancel = False
+        self._phase: str | None = None         # "collect" / "download" / None
+        self._collector: Collector | None = None
 
         self._build_ui()
         self._poll()
@@ -216,14 +218,33 @@ class App(tk.Tk):
         self.log.see("end")
         self.log.configure(state="disabled")
 
+    def _collect_btn_text(self) -> str:
+        """收集进行中时，这个按钮的作用是「结束收集」而不是「开始收集」。"""
+        if self.busy and self._phase == "collect":
+            return "■ 结束收集"
+        return "① 开始收集"
+
+    def _update_download_btn(self) -> None:
+        """按钮上直接带数量，让「收集中」也能看到进度在涨。
+
+        解锁条件：不在忙 + 至少勾了一个。全不选时置灰（点下去会白跑一次）。
+        """
+        picked = len(self._selected())
+        self.btn_download.configure(
+            text=(f"② 下载选中 ({picked})" if self.candidates else "② 下载选中"),
+            state="disabled" if (self.busy or picked == 0) else "normal",
+        )
+
     def _set_busy(self, busy: bool, phase: str = "") -> None:
         self.busy = busy
         state = "disabled" if busy else "normal"
-        self.btn_collect.configure(state=state)
-        self.btn_download.configure(
-            state="disabled" if (busy or not self.candidates) else "normal"
+        # 收集阶段这个按钮要保持可点（它就是「结束收集」）
+        self.btn_collect.configure(
+            state=("normal" if (busy and self._phase == "collect") else state),
+            text=self._collect_btn_text(),
         )
         self.btn_cancel.configure(state="normal" if busy else "disabled")
+        self._update_download_btn()
         if phase:
             self.var_status.set(phase)
 
@@ -236,14 +257,13 @@ class App(tk.Tk):
             self.tree.insert(
                 "", "end", iid=cand.key, values=(mark, cand.hint, cand.source)
             )
-        self.btn_download.configure(
-            state="disabled" if (self.busy or not self.candidates) else "normal"
-        )
+        self._update_download_btn()
 
     def _toggle(self, key: str) -> None:
         self.checked[key] = not self.checked.get(key, True)
         mark = CHECKED if self.checked[key] else UNCHECKED
         self.tree.set(key, "check", mark)
+        self._update_download_btn()
 
     def _on_tree_click(self, event: tk.Event) -> None:
         row = self.tree.identify_row(event.y)
@@ -278,17 +298,41 @@ class App(tk.Tk):
 
     def _on_collect(self) -> None:
         if self.busy:
+            # 收集进行中再点一次 = 结束收集（不用去关浏览器窗口）
+            self._finish_collect()
             return
+
         self.candidates = []
         self.checked = {}
         self._refresh_tree()
         self.progress["value"] = 0
+        self._phase = "collect"
         self._set_busy(True, "收集中…")
         self._append_log("—— 开始收集 ——")
-        self._append_log("浏览器打开后请登录 ETD（首次需登录，之后自动复用），")
-        self._append_log("然后逐个点开试卷，全部点完直接关闭浏览器窗口。")
+        self._append_log("① 在弹出的浏览器窗口里登录 ETD（首次需登录，之后自动复用）")
+        self._append_log("② 逐个点开要看的试卷（按钮上的数字会实时增加）")
+        self._append_log("③ 点完点上面的「■ 结束收集」，或直接关掉浏览器窗口")
+        self._append_log("④ 然后「② 下载选中」解锁，勾选后开始批量下载")
 
         self.worker.submit(self._collect_task(self._make_config()))
+
+    def _finish_collect(self) -> None:
+        """结束收集：关掉后台浏览器，让协程正常收尾并吐出候选列表。"""
+        collector = self._collector
+        loop = self.worker.loop
+        if collector is None or loop is None:
+            return
+        self._append_log("正在结束收集…")
+        self.var_status.set("正在结束…")
+        self.btn_collect.configure(state="disabled")
+
+        def _schedule() -> None:
+            asyncio.ensure_future(collector.aclose())
+
+        try:
+            loop.call_soon_threadsafe(_schedule)
+        except RuntimeError:  # noqa: BLE001 - 事件循环已停
+            pass
 
     async def _collect_task(self, cfg: Config) -> None:
         try:
@@ -297,6 +341,7 @@ class App(tk.Tk):
                 on_log=lambda m: self.msg.put(("log", m)),
                 on_candidate=lambda c: self.msg.put(("candidate", c)),
             )
+            self._collector = collector
             result = await collector.run()
             self.msg.put(("collected", result))
         except Exception as exc:  # noqa: BLE001 - 错误要回显到界面
@@ -314,6 +359,7 @@ class App(tk.Tk):
 
         self._cancel = False
         self.progress["value"] = 0
+        self._phase = "download"
         self._set_busy(True, "下载中…")
         self._append_log(f"—— 开始下载 {len(picked)} 个文件 ——")
 
@@ -333,6 +379,10 @@ class App(tk.Tk):
             self.msg.put(("error", f"下载失败：{type(exc).__name__}: {exc}"))
 
     def _on_cancel(self) -> None:
+        if self._phase == "collect":
+            # 收集阶段没有「下一个文件」这个概念，取消 = 结束收集
+            self._finish_collect()
+            return
         self._cancel = True
         self.var_status.set("正在取消…")
         self._append_log("已请求取消，当前文件下载完后停止。")
@@ -356,17 +406,22 @@ class App(tk.Tk):
                         "", "end", iid=cand.key,
                         values=(CHECKED, cand.hint, cand.source),
                     )
-                    self.var_status.set(f"已收集 {len(self.candidates)} 个")
+                    self._update_download_btn()
+                    self.var_status.set(f"收集中 · 已收集 {len(self.candidates)} 个")
 
                 elif kind == "collected":
                     items = payload
                     assert isinstance(items, list)
+                    self._phase = None
+                    self._collector = None
                     self.candidates = items
                     for c in items:
                         self.checked.setdefault(c.key, True)
                     self._refresh_tree()
                     self._set_busy(False, f"收集完成：{len(items)} 个")
                     self._append_log(f"—— 收集完成，共 {len(items)} 个 ——")
+                    if items:
+                        self._append_log("已解锁：勾选后点「② 下载选中」开始批量下载。")
                     if not items:
                         messagebox.showwarning(
                             "没有收集到",
@@ -386,11 +441,14 @@ class App(tk.Tk):
 
                 elif kind == "downloaded":
                     ok = payload
+                    self._phase = None
                     self._set_busy(False, "完成")
                     self._append_log(f"—— 下载完成：成功 {ok} 个 ——")
                     messagebox.showinfo("完成", f"成功下载 {ok} 个文件。")
 
                 elif kind == "error":
+                    self._phase = None
+                    self._collector = None
                     self._set_busy(False, "出错")
                     self._append_log(str(payload))
                     messagebox.showerror("出错", str(payload))

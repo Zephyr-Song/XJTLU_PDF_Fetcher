@@ -112,6 +112,9 @@ class Collector:
         self._skipped = 0
         self._on_log = on_log
         self._on_candidate = on_candidate
+        # 供 GUI 从外部结束收集（不用逼用户去关浏览器窗口）
+        self._context: BrowserContext | None = None
+        self._stop = False
 
     def _log(self, msg: str) -> None:
         """统一出口：有回调走回调（GUI），没有就打印（CLI）。"""
@@ -187,6 +190,8 @@ class Collector:
         （表现为「收集失败：TargetClosedError」）。
         """
         while True:
+            if self._stop:          # GUI 点了「结束收集」
+                return
             try:
                 if not context.pages:
                     return
@@ -199,11 +204,30 @@ class Collector:
                     return
                 raise
 
+    async def aclose(self) -> None:
+        """从外部结束收集：置停止标志并关掉浏览器，让 run() 正常收敛。
+
+        GUI 的「■ 结束收集」按钮走这条路径，用户不必去找到并关闭浏览器窗口。
+        """
+        self._stop = True
+        ctx = self._context
+        if ctx is None:
+            return
+        try:
+            await ctx.close()
+        except Exception:  # noqa: BLE001 - 已经关了就算了
+            pass
+
     async def run(self) -> list[Candidate]:
         async with async_playwright() as p:
             context, label = await _launch_context(p, self.config)
+            self._context = context
             self._log(f"\n浏览器已启动: {label}")
             self._log(f"登录态目录: {self.config.resolved_profile_dir}")
+
+            if self._stop:      # 还没开始就被要求结束
+                await self.aclose()
+                return list(self._seen.values())
 
             context.on("response", self._on_response)
 
@@ -235,6 +259,7 @@ class Collector:
                 await context.close()
             except Exception:  # noqa: BLE001
                 pass
+            self._context = None
 
             self._log(f"\n收集结束：共 {len(self._seen)} 个候选")
             if self.config.verbose:
