@@ -32,8 +32,6 @@ from .config import Config
 from .detector import (
     Candidate,
     extract_filename,
-    guess_course_code,
-    guess_course_code_from_url,
     is_real_pdf,
     looks_like_pdf_response,
 )
@@ -334,19 +332,7 @@ async def download_all(
                     fallback=cand.hint or "paper",
                 )
 
-                target_dir = out_dir
-                if config.group_by_course:
-                    # 优先从文件名取课程代码；取不到再看 URL 的查询参数
-                    # （不能看路径 —— /browserfile/abc123 这种哈希会被误判）
-                    code = guess_course_code(filename) or guess_course_code_from_url(
-                        cand.url
-                    )
-                    if code:
-                        target_dir = out_dir / code
-                    else:
-                        log(f"{prefix} 认不出课程代码，平铺存放: {filename}")
-
-                path = save_bytes(target_dir, filename, body)
+                path = save_bytes(out_dir, filename, body)
                 log(f"{prefix} 已保存 {path.name}  ({human_size(len(body))})")
                 ok += 1
 

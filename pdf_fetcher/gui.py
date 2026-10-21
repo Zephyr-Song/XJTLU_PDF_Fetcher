@@ -112,11 +112,6 @@ class App(tk.Tk):
             row=1, column=3, **pad
         )
 
-        self.var_group = tk.BooleanVar(value=False)
-        ttk.Checkbutton(top, text="按课程代码分子目录", variable=self.var_group).grid(
-            row=2, column=1, sticky="w", **pad
-        )
-
         top.columnconfigure(1, weight=1)
 
         # ---------- 操作按钮 ----------
@@ -291,7 +286,6 @@ class App(tk.Tk):
         cfg.start_url = self.var_url.get().strip() or cfg.start_url
         out = self.var_out.get().strip()
         cfg.output_dir = Path(out) if out else None
-        cfg.group_by_course = self.var_group.get()
         return cfg
 
     # ------------------------------------------------------------ 收集

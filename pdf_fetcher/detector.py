@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import unquote, urlparse
 
 # ---------------------------------------------------------------- 常量
 
@@ -169,36 +169,3 @@ def sanitize_filename(name: str, max_length: int = 180) -> str:
     return name
 
 
-def guess_course_code(url: str) -> str:
-    """尝试从一段文本里猜课程代码（用于按课归档），猜不到返回空串。
-
-    常见形式：CAN201 / CPT203 / MEC302 / COMP101
-    """
-    # 课程代码通常由 2-5 个字母 + 3-4 位数字组成。
-    # 用自定义边界而不是 \b，因为 \b 不认下划线（CPT203_2023 会匹配失败）。
-    pattern = re.compile(r"(?<![A-Z0-9])([A-Z]{2,5}\d{3,4})(?![0-9])")
-    m = pattern.search(unquote(url).upper())
-    return m.group(1) if m else ""
-
-
-def guess_course_code_from_url(url: str) -> str:
-    """从 URL 里猜课程代码 —— **只看查询参数，不看路径**。
-
-    为什么不能看路径：ETD 的 PDF 链接形如 /browserfile/abc123，
-    那串哈希如果是「字母+数字」的组合（如 abc123），会被课程代码的正则
-    误判成 "ABC123"，于是建出一个毫无意义的子目录。
-
-    查询参数里才有真正的线索，比如 ?file=CAN201_2023_Final.pdf。
-    """
-    parsed = urlparse(url)
-    if not parsed.query:
-        return ""
-    for values in parse_qs(parsed.query).values():
-        for value in values:
-            # 只看像文件名的参数（带扩展名），滤掉签名、ID 之类的噪声
-            if "." not in value:
-                continue
-            code = guess_course_code(value)
-            if code:
-                return code
-    return ""

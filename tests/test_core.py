@@ -15,8 +15,6 @@ from pdf_fetcher.config import Config  # noqa: E402
 from pdf_fetcher.detector import (  # noqa: E402
     Candidate,
     extract_filename,
-    guess_course_code,
-    guess_course_code_from_url,
     is_real_pdf,
     is_static_asset,
     looks_like_pdf_response,
@@ -200,23 +198,10 @@ def test_storage() -> None:
     check("1.5MB", human_size(1024 * 1024 * 3 // 2), "1.5 MB")
 
 
-# ---------------------------------------------------------------- 课程代码
-
-def test_course_code() -> None:
-    print("\n[5] 课程代码猜测（用于按课归档）")
-
-    check("CAN201", guess_course_code("https://x/CAN201/final.pdf"), "CAN201")
-    check("CPT203", guess_course_code("https://x/d/CPT203_2023.pdf"), "CPT203")
-    check("MEC302", guess_course_code("https://x/MEC302-CW1.pdf"), "MEC302")
-    check("COMP101", guess_course_code("https://x/COMP101.pdf"), "COMP101")
-    check("猜不到返回空", guess_course_code("https://x/browserfile/abc"), "")
-    check("纯数字不算", guess_course_code("https://x/20260101.pdf"), "")
-
-
 # ---------------------------------------------------------------- 路径解析
 
 def test_paths() -> None:
-    print("\n[6] 路径解析（真实桌面 / 默认输出目录）")
+    print("\n[5] 路径解析（真实桌面 / 默认输出目录）")
 
     desk = desktop_dir()
     check_true("desktop_dir 返回 Path", isinstance(desk, Path))
@@ -240,40 +225,6 @@ def test_paths() -> None:
     check("可自定义 profile 目录", Config(profile_dir=custom).resolved_profile_dir, custom.resolve())
 
 
-def test_course_code_from_filename() -> None:
-    print("\n[7] 课程代码归档（文件名优先，URL 只看查询参数）")
-
-    # 路径里的哈希不能当课程代码：/browserfile/abc123 曾被误判成 ABC123
-    check(
-        "hash 型 URL 不产生课程代码",
-        guess_course_code_from_url("https://x/browserfile/abc123?sig=1"),
-        "",
-    )
-    check(
-        "hash 型 URL 直接匹配也是空",
-        guess_course_code_from_url("https://x/browserfile/9f8e7d6c"),
-        "",
-    )
-    # 文件名里有
-    check("从文件名取 CAN201", guess_course_code("CAN201_2023_Final.pdf"), "CAN201")
-    check("从文件名取 CPT203", guess_course_code("CPT203 2022 past paper.pdf"), "CPT203")
-    # URL 的查询参数里有
-    check(
-        "从 URL 查询参数取课程代码",
-        guess_course_code_from_url(
-            "https://etd.xjtlu.edu.cn/viewer?file=CAN201_2023_Final.pdf&sig=xyz"
-        ),
-        "CAN201",
-    )
-    # 组合逻辑：文件名优先，取不到再退回 URL 查询参数
-    check(
-        "文件名优先于 URL",
-        guess_course_code("CAN201_2023.pdf")
-        or guess_course_code_from_url("https://x/browserfile/abc"),
-        "CAN201",
-    )
-
-
 def main() -> int:
     print("=" * 62)
     print("XJTLU PDF Fetcher · 核心逻辑测试")
@@ -283,9 +234,7 @@ def main() -> int:
     test_candidate_key()
     test_filename()
     test_storage()
-    test_course_code()
     test_paths()
-    test_course_code_from_filename()
 
     print("\n" + "=" * 62)
     print(f"通过 {len(PASSED)} 项，失败 {len(FAILED)} 项")

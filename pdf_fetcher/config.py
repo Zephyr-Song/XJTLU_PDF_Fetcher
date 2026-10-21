@@ -27,10 +27,8 @@ class Config:
     url_keywords: tuple[str, ...] = ("browserfile",)
 
     # ---- 输出 ----
-    # None 表示桌面
+    # None 表示桌面。所有文件平铺存放（不做子目录分组）
     output_dir: Path | None = None
-    # True 时按课程代码分子目录（优先从文件名猜，其次从 URL）
-    group_by_course: bool = False
 
     # ---- 浏览器 profile ----
     # 存放 ETD 登录态的独立用户数据目录。None 表示用系统默认位置。

@@ -139,7 +139,6 @@ Windows 上也可以直接双击 **`run_gui.bat`**。嫌装环境麻烦的话，
 │ 设置                                                    │
 │  起始网址  https://etd.xjtlu.edu.cn/                    │
 │  保存到    C:\Users\你\Desktop        [浏览…] [打开]    │
-│  ☐ 按课程代码分子目录                                   │
 ├─────────────────────────────────────────────────────────┤
 │ [① 开始收集] [② 下载选中 (2)] [取消]  [全选] [全不选]   │
 │   ↑ 收集中会变成 [■ 结束收集]                           │
@@ -188,9 +187,6 @@ python main.py
 # 存到指定目录
 python main.py -o D:/papers
 
-# 按课程代码自动分子目录（CAN201/、CPT203/ ...）
-python main.py -o D:/papers --group-by-course
-
 # 只收集，把 URL 存成文件，之后再用（链接有签名，可能过期）
 python main.py --collect-only -o urls.txt
 
@@ -208,8 +204,7 @@ python main.py -v
 
 | 参数 | 说明 |
 |---|---|
-| `-o, --output` | 输出目录（默认桌面） |
-| `--group-by-course` | 按课程代码（如 `CAN201`）建子目录。课程代码优先从**文件名**取，其次从 URL 的查询参数取 —— 路径里的 `/browserfile/<hash>` 是哈希不是课程代码，认不出来就平铺存放 |
+| `-o, --output` | 输出目录（默认桌面）。所有文件**平铺**存放，不建子目录 |
 | `--from-file FILE` | 从文本文件读 URL 列表下载，每行一个，`#` 开头为注释 |
 | `--collect-only` | 只收集不下载；配合 `-o` 把 URL 写入文件 |
 | `--no-auto-download` | 收集后打印 URL 但不下载 |

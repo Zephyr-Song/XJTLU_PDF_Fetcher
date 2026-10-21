@@ -5,7 +5,7 @@
   · %PDF magic bytes 校验能拦住伪装文件
   · Content-Disposition 里的中文文件名正确解码
   · 重名自动加序号、不覆盖
-  · 按课程代码分子目录
+  · 一律平铺存放，不建子目录
 
 运行: python tests/test_integration.py
 """
@@ -158,17 +158,19 @@ async def run_tests(server: Server) -> None:
             all(p.read_bytes()[:4] == b"%PDF" for p in out.glob("*.pdf")),
         )
 
-    # 按课程代码分目录
+    # 一律平铺存放：文件名里带课程代码也不能建子目录
     with tempfile.TemporaryDirectory() as tmp:
-        out = Path(tmp) / "grouped"
+        out = Path(tmp) / "flat"
         candidates = [
             Candidate(url=f"{server.base}/named/CAN201_paper"),
         ]
-        cfg = Config(output_dir=out, headless=True, group_by_course=True)
+        cfg = Config(output_dir=out, headless=True)
         await download_all(candidates, cfg)
         subdirs = [p.name for p in out.iterdir() if p.is_dir()]
-        print("\n[按课程分目录]")
-        check("生成子目录", subdirs, ["CAN201"])
+        files = [p.name for p in out.iterdir() if p.is_file()]
+        print("\n[平铺存放]")
+        check("不生成子目录", subdirs, [])
+        check_true("文件直接落在输出目录", any("CAN201" in f for f in files))
 
     # 从文件读取的流程（urls.txt 为空时不应崩）
     print("\n[边界情况]")

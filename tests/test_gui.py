@@ -83,7 +83,7 @@ def main() -> int:
         for attr in (
             "btn_collect", "btn_download", "btn_cancel",
             "tree", "progress", "log",
-            "var_url", "var_out", "var_group", "var_status",
+            "var_url", "var_out", "var_status",
         ):
             check_true(f"控件存在: {attr}", hasattr(app, attr))
 

@@ -23,8 +23,8 @@ def build_parser() -> argparse.ArgumentParser:
   # 默认：打开浏览器手动浏览 → 收集 → 关闭浏览器后自动批量下载
   python main.py
 
-  # 指定输出目录，并按课程代码分子目录
-  python main.py -o D:/papers --group-by-course
+  # 指定输出目录
+  python main.py -o D:/papers
 
   # 从链接列表直接下载（不打开浏览器，适合已经整理好 URL 的情况）
   python main.py --from-file urls.txt
@@ -35,8 +35,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("-o", "--output", type=str, default=None,
                    help="输出目录（默认桌面）")
-    p.add_argument("--group-by-course", action="store_true",
-                   help="按课程代码（如 CAN201）建子目录")
     p.add_argument("--from-file", type=str, default=None, metavar="URLSFILE",
                    help="从文本文件读取 URL 列表直接下载，每行一个")
     p.add_argument("--collect-only", action="store_true",
@@ -61,8 +59,6 @@ def config_from_args(args: argparse.Namespace) -> Config:
     cfg = Config()
     if args.output and not args.collect_only:
         cfg.output_dir = Path(args.output)
-    if args.group_by_course:
-        cfg.group_by_course = True
     if args.no_auto_download:
         cfg.auto_download = False
     if args.headless:
