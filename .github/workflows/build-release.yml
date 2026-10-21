@@ -1,7 +1,7 @@
 name: Build Windows EXE
 
 # 在「发布 Release」时自动把图形界面打包成单文件 exe，并作为附件挂到 Release 上。
-# 这样不会用命令行的同学也能在仓库的 Releases 页面直接下载双击即用。
+# 如果仓库配置了代码签名证书（见下），会在上传前自动给 exe 签名，消除 SmartScreen 拦截。
 on:
   release:
     types: [created]
@@ -29,6 +29,24 @@ jobs:
 
       - name: Build EXE
         run: pyinstaller build_exe.spec --noconfirm
+
+      - name: Sign EXE
+        # 仅当配置了证书时才签名。需要两个仓库 Secrets：
+        #   CODESIGN_PFX       —— 证书（含私钥）的 base64 编码 PFX
+        #   CODESIGN_PASSWORD  —— PFX 的密码
+        # 没有证书时此步自动跳过，构建照常产出未签名 exe。
+        if: ${{ secrets.CODESIGN_PFX != '' }}
+        env:
+          CODESIGN_PFX: ${{ secrets.CODESIGN_PFX }}
+          CODESIGN_PASSWORD: ${{ secrets.CODESIGN_PASSWORD }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $pfx = "cert.pfx"
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:CODESIGN_PFX))
+          $signtool = Get-ChildItem -Path "C:\Program Files (x86)\Windows Kits\10\bin", "C:\Program Files\Windows Kits\10\bin" -Recurse -Filter signtool.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $signtool) { throw "signtool.exe not found on runner" }
+          & $signtool.FullName sign /f $pfx /p $env:CODESIGN_PASSWORD /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 "dist/XJTLU_PDF_Fetcher.exe"
+          if ($LASTEXITCODE -ne 0) { throw "signtool sign failed" }
 
       - name: Upload to Release
         if: github.event_name == 'release'

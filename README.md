@@ -20,6 +20,21 @@
 
 > exe 只是把本工具打包成免安装程序，**仍然只复用你自己的 ETD 登录态**，试卷留在你本机、不对外分发。下面的使用须知同样适用。
 
+### 🔏 关于 Windows SmartScreen 拦截
+
+第一次下载打开时，Windows 可能弹出 **“Windows 已保护你的电脑 / SmartScreen 阻止了无法识别的应用”**。这是因为 exe **没有代码签名**、发布者未知——属正常现象，不代表文件有毒。
+
+两种处理办法：
+
+1. **临时（用户侧）**：在拦截窗口点「**更多信息**」→「**仍要运行**」即可。本工具源码完全公开，可自行审查。
+2. **彻底（发布侧，推荐）**：给 exe 做 Authenticode 代码签名。本项目 CI 已支持自动签名——在仓库 **Settings → Secrets and variables → Actions** 添加两个 Secret：
+   - `CODESIGN_PFX`：证书（含私钥）的 **base64 编码 PFX**
+   - `CODESIGN_PASSWORD`：PFX 密码
+
+   之后每次发 Release，GitHub Actions 自动用该证书签名，SmartScreen 拦截即消失（**EV 证书即时生效**；OV/IV 证书会先显示你的发布者名称，随下载量积累声誉后不再警告）。
+
+   - 预算有限可看：Certum 开源开发者证书（便宜）、Sectigo / SSL.com 的 OV 证书，或开源项目免费签名服务 **SignPath**。
+
 ---
 
 ## ⚠️ 使用须知（请先读完）
