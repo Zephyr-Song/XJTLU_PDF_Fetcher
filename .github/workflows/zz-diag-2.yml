@@ -1,0 +1,11 @@
+name: diag-secrets-in-if
+on:
+  push:
+    branches: [main]
+jobs:
+  a:
+    runs-on: ubuntu-latest
+    steps:
+      - name: step with secrets in if
+        if: ${{ secrets.CODESIGN_PFX != '' }}
+        run: echo "diag2 ok"
