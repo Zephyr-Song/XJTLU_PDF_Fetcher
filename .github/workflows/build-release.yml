@@ -30,6 +30,23 @@ jobs:
       - name: Build EXE
         run: pyinstaller build_exe.spec --noconfirm
 
+      - name: Package zip (exe + guide + unblock script)
+        # 额外打一个 zip：里面是 exe + 中文使用说明 + 一键解除锁定脚本。
+        # 用户用 7-Zip/WinRAR 解压通常不会带上 Mark-of-the-Web 标记，
+        # 也不会再触发 SmartScreen；自带"全部解压缩"则仍会带标记，
+        # 这时用压缩包里的「解除锁定.bat」一键清掉即可。
+        shell: pwsh
+        run: |
+          $stage = "release-pkg"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item "dist/XJTLU_PDF_Fetcher.exe" -Destination $stage
+          Copy-Item "packaging/解除锁定.bat" -Destination $stage
+          # 写成带 BOM 的 UTF-8，保证 Windows 记事本打开不乱码
+          Get-Content "packaging/使用说明.txt" -Raw -Encoding UTF8 |
+            Out-File "$stage/使用说明.txt" -Encoding utf8BOM
+          Compress-Archive -Path "$stage/*" -DestinationPath "dist/XJTLU_PDF_Fetcher-win-x64.zip" -Force
+          Get-ChildItem "dist" | Select-Object Name, Length
+
       - name: Sign EXE with SignPath
         # 开源免费代码签名（SignPath Foundation 签发 OV 证书，私钥存于其 HSM）。
         # 需要仓库 Secrets / Variables：
@@ -79,6 +96,8 @@ jobs:
         if: github.event_name == 'release'
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/XJTLU_PDF_Fetcher.exe
+          files: |
+            dist/XJTLU_PDF_Fetcher.exe
+            dist/XJTLU_PDF_Fetcher-win-x64.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

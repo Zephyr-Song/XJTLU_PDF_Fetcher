@@ -15,7 +15,13 @@
 不想装 Python、不想碰 git？直接下载打包好的单文件程序，**双击就能用**：
 
 1. 打开本仓库的 **[Releases](https://github.com/Zephyr-Song/XJTLU_PDF_Fetcher/releases/latest)** 页面
-2. 在 **Assets** 里下载 `XJTLU_PDF_Fetcher.exe`
+2. 在 **Assets** 里挑一个下载：
+
+   | 附件 | 大小 | 说明 |
+   |---|---|---|
+   | `XJTLU_PDF_Fetcher.exe` | ~49 MB | **推荐**。单文件，下载完直接双击，不用解压 |
+   | `XJTLU_PDF_Fetcher-win-x64.zip` | ~49 MB | 压缩包。里面有 exe + 中文使用说明 + 一键「解除锁定」脚本 |
+
 3. 双击运行 → 用自己的账号登录 ETD → 点开试卷 → 关浏览器 → 自动下载
 
 > exe 只是把本工具打包成免安装程序，**仍然只复用你自己的 ETD 登录态**，试卷留在你本机、不对外分发。下面的使用须知同样适用。
@@ -24,16 +30,25 @@
 
 第一次下载打开时，Windows 可能弹出 **“Windows 已保护你的电脑 / SmartScreen 阻止了无法识别的应用”**。这是因为 exe **没有代码签名**、发布者未知——属正常现象，不代表文件有毒。
 
-两种处理办法：
+**临时解决（推荐，一次性，永久生效）**——把文件的「来自网络」标记去掉：
 
-1. **临时（用户侧）**：在拦截窗口点「**更多信息**」→「**仍要运行**」即可。本工具源码完全公开，可自行审查。
-2. **彻底（发布侧，推荐）**：给 exe 做 Authenticode 代码签名。本项目 CI 已支持自动签名——在仓库 **Settings → Secrets and variables → Actions** 添加两个 Secret：
-   - `CODESIGN_PFX`：证书（含私钥）的 **base64 编码 PFX**
-   - `CODESIGN_PASSWORD`：PFX 密码
+```
+右键 XJTLU_PDF_Fetcher.exe  →  属性  →  最下面勾选「解除锁定」→  确定
+```
 
-   之后每次发 Release，GitHub Actions 自动用该证书签名，SmartScreen 拦截即消失（**EV 证书即时生效**；OV/IV 证书会先显示你的发布者名称，随下载量积累声誉后不再警告）。
+或者直接运行压缩包里的 **`解除锁定.bat`**。做完这一次，弹窗**永久消失**，以后每次双击都直接打开。
 
-   - 预算有限可看：Certum 开源开发者证书（便宜）、Sectigo / SSL.com 的 OV 证书，或开源项目免费签名服务 **SignPath**。
+> 原理：SmartScreen 拦的是 **Mark-of-the-Web** 标记（浏览器下载时打的）。
+> 用 7-Zip / WinRAR 解压通常不会带上这个标记；用 Windows 自带「全部解压缩」则会带上——
+> 这两种情况都能用上面的「解除锁定」一键清掉。
+
+**彻底解决（发布侧）**：给 exe 做 Authenticode 代码签名。本项目 CI 已支持自动签名——在仓库 **Settings → Secrets and variables → Actions** 添加两个 Secret：
+- `CODESIGN_PFX`：证书（含私钥）的 **base64 编码 PFX**
+- `CODESIGN_PASSWORD`：PFX 密码
+
+之后每次发 Release，GitHub Actions 自动用该证书签名，SmartScreen 拦截即消失（**EV 证书即时生效**；OV/IV 证书会先显示你的发布者名称，随下载量积累声誉后不再警告）。
+
+预算有限可看：Certum 开源开发者证书（便宜）、Sectigo / SSL.com 的 OV 证书，或开源项目免费签名服务 **SignPath**。
 
 ---
 
