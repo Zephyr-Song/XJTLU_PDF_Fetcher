@@ -92,6 +92,21 @@ playwright install chromium
 
 ---
 
+## 自行构建（可选）
+
+想自己打包 exe：
+
+```bash
+pip install pyinstaller
+pyinstaller build_exe.spec --noconfirm
+```
+
+产物在 `dist/XJTLU_PDF_Fetcher.exe`。
+
+或者什么都不装，直接用 Releases 里那个 —— 它由本仓库的 GitHub Actions 从同一份公开源码自动构建。
+
+---
+
 ## 用法
 
 ### 方式一：图形界面（推荐，不用记参数）
@@ -336,6 +351,18 @@ playwright install chromium
 ## 致谢
 
 两阶段收集的思路受 [kevinlasnh/xjtlu-final-paper-pdf-downloader](https://github.com/kevinlasnh/xjtlu-final-paper-pdf-downloader) 启发（同校同学的项目）。本项目在实现上走了不同路线：用网络层特征匹配替代 DOM 解析，用两阶段解耦替代自动遍历。代码为独立实现。
+
+---
+
+## 代码签名政策（Code signing policy）
+
+Free code signing provided by [SignPath.io](https://signpath.io), certificate by [SignPath Foundation](https://signpath.org).
+
+- **构建来源**：所有 Windows 产物（`XJTLU_PDF_Fetcher.exe`）均由本仓库的 GitHub Actions 工作流 `.github/workflows/build-release.yml` 从公开源码自动构建，不接受手工上传的二进制。
+- **签名者**：证书发布者为 SignPath Foundation（开源免费计划），私钥存放在其 HSM 中。
+- **审批流程**：每个 Release 的签名请求由仓库维护者（@Zephyr-Song）在 SignPath 门户中人工审批一次。
+- **账号安全**：SignPath 账号与本 GitHub 账号均启用双因素认证（2FA）。
+- **隐私**：本工具不向任何服务器上报用户信息；它唯一的网络行为就是你本人访问 ETD 页面与下载你本人有权访问的试卷。
 
 ---
 

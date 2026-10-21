@@ -30,12 +30,39 @@ jobs:
       - name: Build EXE
         run: pyinstaller build_exe.spec --noconfirm
 
-      - name: Sign EXE
-        # 仅当配置了证书时才签名。需要两个仓库 Secrets：
+      - name: Sign EXE with SignPath
+        # 开源免费代码签名（SignPath Foundation 签发 OV 证书，私钥存于其 HSM）。
+        # 需要仓库 Secrets / Variables：
+        #   SIGNPATH_API_TOKEN              —— SignPath 控制台生成的 API token
+        #   SIGNPATH_ORGANIZATION_ID        —— 组织 ID（可放 Variables）
+        #   SIGNPATH_PROJECT_SLUG           —— 项目 slug
+        #   SIGNPATH_SIGNING_POLICY_SLUG    —— 签名策略 slug
+        #   SIGNPATH_ARTIFACT_CONFIG_SLUG   —— 产物配置 slug
+        # 未配置时此步自动跳过，构建照常产出未签名 exe。
+        # 注意：免费计划每次发版需在 SignPath 门户人工点一次 Approve，
+        #       下面的 wait-for-completion 会等这次审批（超时 60 分钟）。
+        if: ${{ secrets.SIGNPATH_API_TOKEN != '' }}
+        uses: signpath/github-action-submit-signing-request@v1
+        env:
+          SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_ARTIFACT_CONFIG_SLUG }}
+          input-artifact-path: dist/XJTLU_PDF_Fetcher.exe
+          output-artifact-path: dist/XJTLU_PDF_Fetcher.exe
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 3600
+
+      - name: Sign EXE with own certificate
+        # 备选路径：如果你有自购的代码签名证书（PFX），走这个步骤。
+        # 需要两个仓库 Secrets：
         #   CODESIGN_PFX       —— 证书（含私钥）的 base64 编码 PFX
         #   CODESIGN_PASSWORD  —— PFX 的密码
-        # 没有证书时此步自动跳过，构建照常产出未签名 exe。
-        if: ${{ secrets.CODESIGN_PFX != '' }}
+        # 与 SignPath 步骤互斥：SignPath 已启用时不再重复签。
+        if: ${{ secrets.CODESIGN_PFX != '' && secrets.SIGNPATH_API_TOKEN == '' }}
         env:
           CODESIGN_PFX: ${{ secrets.CODESIGN_PFX }}
           CODESIGN_PASSWORD: ${{ secrets.CODESIGN_PASSWORD }}
