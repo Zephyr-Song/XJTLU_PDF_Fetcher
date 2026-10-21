@@ -364,6 +364,8 @@ Free code signing provided by [SignPath.io](https://signpath.io), certificate by
 - **账号安全**：SignPath 账号与本 GitHub 账号均启用双因素认证（2FA）。
 - **隐私**：本工具不向任何服务器上报用户信息；它唯一的网络行为就是你本人访问 ETD 页面与下载你本人有权访问的试卷。
 
+完整政策见 [CODE_SIGNING_POLICY.md](CODE_SIGNING_POLICY.md)。
+
 ---
 
 ## 许可
