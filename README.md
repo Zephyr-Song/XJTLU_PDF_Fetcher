@@ -279,9 +279,22 @@ msedge  →  chrome  →  playwright 内置 chromium
 - **第一次**使用时，在弹出的窗口里登录一次 ETD，状态就存下来了
 - **之后每次**运行都自动带上这份登录态，不用再登
 - 收集阶段和下载阶段共用同一个 profile，所以批量下载时带着同一份 cookie，不会被 ETD 拒掉
-- 用的是独立 profile，不会和你日常浏览的 Edge/Chrome 打架（profile 被占用时也开得了）
+- 用的是独立 profile，不会和你日常浏览的 Edge/Chrome 打架（那两个用的是各自的默认 profile）
 
 > 早期版本用 `browser.new_context()`，每次都是全新临时 profile —— 所以每次都要重新登录，而且下载阶段会丢掉 cookie。这两点都已修掉。
+
+### 同一个 profile 同时只能有一个浏览器
+
+Chromium 系浏览器对同一个 `--user-data-dir` 是**单例**的：第二个进程启动后，发现已有实例在跑，就把命令行转交给它，然后**自己以 `exitCode=0` 退出**。
+
+Playwright 看到"浏览器启动即退出"，抛的是 `TargetClosedError`。这个信号极容易被误读成"浏览器坏了"或"没装浏览器"—— v1.0.5 及更早就真的这么报过（明明装着 Edge 和 Chrome，却提示两个都没有）。
+
+现在的处理：
+
+1. **启动前先探一下 `profile/lockfile`**。浏览器运行期间 Chromium 会以独占共享模式锁住它（`open` 直接 `PermissionError`），关掉后文件消失。这个判断只要几十微秒，不用枚举进程。
+2. 被占用时直接给准确提示：**「关掉那个浏览器窗口，再点开始收集」**，而不是让你去装浏览器。
+3. **GUI 加跨进程单实例锁**（`%LOCALAPPDATA%\XJTLU_PDF_Fetcher\app.lock`）。重复双击 exe 时第二个实例会提示"已经有一个窗口在运行"然后退出，根本不会去抢 profile。
+4. 收集结束/出错/关窗口时，**`try/finally` 保证关掉浏览器**，不留占着 profile 的僵尸进程。
 
 ### 收集阶段：为什么必须在这个窗口里点
 
@@ -327,6 +340,7 @@ Path.home() / "Desktop"
 | **URL 带签名，会过期** | 收集阶段拿到的链接含 `timestamp` / `signature`，过一段时间就失效。`--collect-only` 存下的列表建议尽快用掉 |
 | **分片加载的 PDF 收不到** | 如果试卷用 canvas 逐页渲染或分片请求，不会有单个完整的 PDF 响应，本工具无法处理 |
 | **只能下载你有权限的** | 完全复用你的登录态，没有任何越权手段 |
+| **同时只能开一个窗口 / 一个浏览器** | profile 是独占的。重复双击 exe 会被单实例锁挡下；上窗口没关干净时会提示「关掉浏览器窗口」—— 详见上一节 |
 
 ---
 
@@ -340,16 +354,17 @@ XJTLU_PDF_Fetcher/
 ├── requirements.txt
 ├── pdf_fetcher/
 │   ├── config.py              # 所有可调参数
-│   ├── detector.py            # PDF 识别 / 文件名 / 课程代码（纯函数）
+│   ├── detector.py            # PDF 识别 / 文件名清理（纯函数）
 │   ├── storage.py             # 落盘与重名处理
 │   ├── paths.py               # 真实桌面 / 浏览器 profile 目录解析
+│   ├── guard.py               # 单实例锁 / profile 占用检测
 │   ├── collector.py           # 两阶段核心（收集 + 下载）
 │   ├── gui.py                 # Tkinter 图形界面
 │   └── cli.py                 # 命令行
 └── tests/
-    ├── test_core.py           # 65 项纯逻辑测试（无需浏览器）
-    ├── test_integration.py    # 12 项端到端测试（本地 HTTP 服务）
-    └── test_gui.py            # 27 项界面测试（需 tkinter）
+    ├── test_core.py           # 61 项纯逻辑测试（无需浏览器）
+    ├── test_integration.py    # 16 项端到端测试（本地 HTTP 服务）
+    └── test_gui.py            # 36 项界面测试（需 tkinter）
 ```
 
 设计上把**所有能纯函数化的逻辑都抽出来了**（`detector.py` / `storage.py`），所以大部分行为可以不起浏览器就验证。GUI 通过消息队列与后台线程通信 —— Tkinter 不是线程安全的，所有界面更新都必须在主线程做。
@@ -359,12 +374,12 @@ XJTLU_PDF_Fetcher/
 ## 测试
 
 ```bash
-python tests/test_core.py         # 49 项纯逻辑，秒级
-python tests/test_integration.py  # 12 项端到端，本地起 HTTP 服务
-python tests/test_gui.py          # 26 项界面测试，需要 tkinter
+python tests/test_core.py         # 61 项纯逻辑，秒级
+python tests/test_integration.py  # 16 项端到端，本地起 HTTP 服务
+python tests/test_gui.py          # 36 项界面测试，需要 tkinter
 ```
 
-当前状态：**49 + 12 + 26 全部通过**。
+当前状态：**61 + 16 + 36 = 113 全部通过**。
 
 > `test_gui.py` 在缺少 tkinter 的环境（部分精简版 Python）会自动跳过，并明确提示跳过原因，不会伪装成通过。
 
@@ -391,11 +406,27 @@ python main.py -v
 
 链接可能已过期，重新跑一次收集。
 
-**提示浏览器启动失败？**
+**提示「浏览器 profile 正被占用」？**
+
+上一次的浏览器窗口没关干净。找到那个窗口关掉即可，**不用重新登录**（登录态在 profile 里，跟窗口无关）。
+
+想手工确认是谁占着，在 PowerShell 里把这个 profile 的进程列出来：
+
+```powershell
+Get-CimInstance Win32_Process |
+  Where-Object { $_.CommandLine -like '*XJTLU_PDF_Fetcher*' } |
+  Select-Object ProcessId, Name
+```
+
+看到 `msedge.exe` / `chrome.exe` 就是它；`XJTLU_PDF_Fetcher.exe` 有多条说明你开了多个窗口。
+
+**提示「浏览器启动失败」（但没说是 profile 被占用）？**
 
 ```bash
 playwright install chromium
 ```
+
+或者换一个浏览器通道：`python main.py --channel chrome`。
 
 **Windows 上中文文件名乱码？**
 

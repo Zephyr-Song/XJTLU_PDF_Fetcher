@@ -35,6 +35,7 @@ from .detector import (
     is_real_pdf,
     looks_like_pdf_response,
 )
+from .guard import ProfileBusyError, busy_hint, profile_in_use
 from .storage import human_size, save_bytes
 
 try:  # 新版 Playwright 单独导出了这个异常类型
@@ -67,30 +68,81 @@ _NO_BROWSER_HINT = (
     "请安装 Edge 或 Chrome 任意一个后重试。"
 )
 
+_LAUNCH_FAILED_HINT = (
+    "浏览器启动失败 —— 浏览器是装着的，但没能正常拉起窗口。\n\n"
+    "常见原因：\n"
+    "· 浏览器窗口被安全软件 / 组策略拦截\n"
+    "· 浏览器版本与内置驱动不匹配\n"
+    "· 上次的浏览器进程没退干净，还占着 profile\n\n"
+    "可以试试：\n"
+    "· 关掉所有 Edge / Chrome 窗口后重试\n"
+    "· 命令行加 --channel chrome 换另一个浏览器\n"
+    "· 删掉 profile 目录让它重建（代价：要重新登录一次）"
+)
+
+# 判断异常是否表示「这个通道根本没有对应的可执行文件」
+_MISSING_MARKERS = (
+    "executable doesn't exist",
+    "is not found",
+    "no such file",
+    "找不到",
+)
+
+# 上次非正常退出时，不要弹「恢复页面」气泡打断流程
+_LAUNCH_ARGS = (
+    "--disable-session-crashed-bubble",
+    "--hide-crash-restore-bubble",
+)
+
+
+def _looks_missing(message: str) -> bool:
+    low = message.lower()
+    return any(marker in low for marker in _MISSING_MARKERS)
+
 
 async def _launch_context(playwright, config: Config) -> tuple[BrowserContext, str]:
     """按优先级启动持久化上下文，返回 (context, 通道名)。
 
     持久化的意义：登录态存在磁盘 profile 里，只需第一次登录；
     收集阶段和下载阶段也因此共享同一份 cookie。
+
+    启动前先确认 profile 没被占用 —— 否则 Chromium 的单例机制会让新进程
+    直接把命令行转交给已有实例然后自己退出（exitCode=0），
+    表现出来是 TargetClosedError，极容易被误判成「没装浏览器」。
     """
+    profile = config.resolved_profile_dir
+    if profile_in_use(profile):
+        raise ProfileBusyError(busy_hint(profile))
+
     errors: list[str] = []
+    missing: list[str] = []
+
     for channel in config.browser_channels:
         label = channel or "chromium(内置)"
         try:
-            kwargs: dict = {"headless": config.headless}
+            kwargs: dict = {"headless": config.headless, "args": list(_LAUNCH_ARGS)}
             if channel:
                 kwargs["channel"] = channel
             context = await playwright.chromium.launch_persistent_context(
-                user_data_dir=str(config.resolved_profile_dir),
+                user_data_dir=str(profile),
                 **kwargs,
             )
             return context, label
         except Exception as exc:  # noqa: BLE001 - 逐个通道试探，失败是预期路径
-            errors.append(f"  · {label}: {type(exc).__name__}: {exc}")
+            message = f"{type(exc).__name__}: {exc}"
+            errors.append(f"  · {label}: {message}")
+            if _looks_missing(message):
+                missing.append(label)
+            # 启动瞬间被单例机制顶掉：说明这期间 profile 被别人占了
+            if type(exc).__name__ == "TargetClosedError" and profile_in_use(profile):
+                raise ProfileBusyError(busy_hint(profile)) from exc
             continue
 
-    raise RuntimeError(_NO_BROWSER_HINT + "\n\n各通道尝试结果：\n" + "\n".join(errors))
+    detail = "\n\n各通道尝试结果：\n" + "\n".join(errors)
+    # 只有「每个通道都报可执行文件不存在」才敢说是没装浏览器
+    if missing and len(missing) == len(config.browser_channels):
+        raise RuntimeError(_NO_BROWSER_HINT + detail)
+    raise RuntimeError(_LAUNCH_FAILED_HINT + detail)
 
 
 # ---------------------------------------------------------------- 收集阶段
@@ -220,50 +272,61 @@ class Collector:
         async with async_playwright() as p:
             context, label = await _launch_context(p, self.config)
             self._context = context
-            self._log(f"\n浏览器已启动: {label}")
-            self._log(f"登录态目录: {self.config.resolved_profile_dir}")
-
-            if self._stop:      # 还没开始就被要求结束
-                await self.aclose()
-                return list(self._seen.values())
-
-            context.on("response", self._on_response)
-
-            pages = list(context.pages)
-            page = pages[0] if pages else await context.new_page()
-
-            self._log(f"\n正在打开: {self.config.start_url}")
             try:
-                await page.goto(
-                    self.config.start_url,
-                    wait_until="domcontentloaded",
-                    timeout=self.config.page_timeout_ms,
-                )
-            except Exception as exc:  # noqa: BLE001 - 超时也允许继续手动操作
-                self._log(f"页面加载提示: {type(exc).__name__}（可继续手动操作）")
+                return await self._collect_loop(context, label)
+            finally:
+                # 无论正常结束、异常退出还是被取消，都必须关掉浏览器 ——
+                # 否则 profile 一直被占着，下次启动必然 TargetClosedError。
+                try:
+                    await context.close()
+                except Exception:  # noqa: BLE001
+                    pass
+                self._context = None
 
-            self._log(
-                "收集模式已开启：请在浏览器窗口里登录 ETD（首次需登录，之后自动复用），"
-                "然后逐个点开试卷。\n全部点完后，直接关闭浏览器窗口即可开始批量下载。"
-            )
+    async def _collect_loop(
+        self, context: BrowserContext, label: str
+    ) -> list[Candidate]:
+        self._log(f"\n浏览器已启动: {label}")
+        self._log(f"登录态目录: {self.config.resolved_profile_dir}")
 
-            # 等待用户关闭浏览器（所有页面都关掉）
-            await self._wait_for_browser_closed(context, page)
-
-            # 关浏览器前扫一遍 DOM 链接
-            await self._scan_dom_links(context)
-
-            try:
-                await context.close()
-            except Exception:  # noqa: BLE001
-                pass
-            self._context = None
-
-            self._log(f"\n收集结束：共 {len(self._seen)} 个候选")
-            if self.config.verbose:
-                self._log(f"（另有 {self._skipped} 个非 PDF 响应被跳过）")
-
+        if self._stop:      # 还没开始就被要求结束
             return list(self._seen.values())
+
+        context.on("response", self._on_response)
+
+        # 优先复用已有页面：上次非正常退出时 Chromium 会恢复多个标签，
+        # 这里挑一个非 about:blank 的，避免在空白页里等着而看不到起始网址。
+        existing = list(context.pages)
+        pages = [pg for pg in existing if pg.url != "about:blank"]
+        page = pages[0] if pages else (existing[0] if existing
+                                       else await context.new_page())
+
+        self._log(f"\n正在打开: {self.config.start_url}")
+        try:
+            await page.goto(
+                self.config.start_url,
+                wait_until="domcontentloaded",
+                timeout=self.config.page_timeout_ms,
+            )
+        except Exception as exc:  # noqa: BLE001 - 超时也允许继续手动操作
+            self._log(f"页面加载提示: {type(exc).__name__}（可继续手动操作）")
+
+        self._log(
+            "收集模式已开启：请在浏览器窗口里登录 ETD（首次需登录，之后自动复用），"
+            "然后逐个点开试卷。\n全部点完后，点「■ 结束收集」或直接关闭浏览器窗口。"
+        )
+
+        # 等待用户关闭浏览器（所有页面都关掉）
+        await self._wait_for_browser_closed(context, page)
+
+        # 关浏览器前扫一遍 DOM 链接
+        await self._scan_dom_links(context)
+
+        self._log(f"\n收集结束：共 {len(self._seen)} 个候选")
+        if self.config.verbose:
+            self._log(f"（另有 {self._skipped} 个非 PDF 响应被跳过）")
+
+        return list(self._seen.values())
 
 
 # ---------------------------------------------------------------- 下载阶段

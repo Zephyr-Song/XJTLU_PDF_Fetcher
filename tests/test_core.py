@@ -225,6 +225,71 @@ def test_paths() -> None:
     check("可自定义 profile 目录", Config(profile_dir=custom).resolved_profile_dir, custom.resolve())
 
 
+# ---------------------------------------------------------------- 占用检测
+
+def _hold_exclusive(path: Path):
+    """以「独占共享模式」打开文件，模拟 Chromium 锁住 lockfile 的行为。
+
+    Windows 上 Chromium 用 FILE_SHARE_NONE 打开 lockfile，其他进程连 open
+    都会失败（PermissionError）。普通 msvcrt.locking 模拟不出这个效果，
+    因为它们只锁字节区间、仍允许打开。
+    """
+    if sys.platform == "win32":
+        import ctypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CreateFileW.restype = ctypes.c_void_p
+        handle = kernel32.CreateFileW(
+            str(path), 0x80000000 | 0x40000000, 0, None, 4, 0, None
+        )
+        if handle in (None, ctypes.c_void_p(-1).value):
+            raise OSError("模拟占用失败")
+        return handle
+    raise RuntimeError("仅 Windows 需要模拟")
+
+
+def _release(handle) -> None:
+    import ctypes
+
+    ctypes.WinDLL("kernel32").CloseHandle(ctypes.c_void_p(handle))
+
+
+def test_guard() -> None:
+    print("\n[6] profile 占用检测 / 单实例锁")
+
+    from pdf_fetcher.guard import SingleInstance, profile_in_use
+
+    tmp = Path(tempfile.mkdtemp()) / "profile"
+    tmp.mkdir(parents=True)
+
+    check("空目录不算占用", profile_in_use(tmp), False)
+
+    lockfile = tmp / "lockfile"
+    lockfile.write_bytes(b"")
+    check("残留的未加锁 lockfile 不算占用", profile_in_use(tmp), False)
+
+    if sys.platform == "win32":
+        handle = _hold_exclusive(lockfile)
+        try:
+            check("被浏览器独占锁住 = 占用中", profile_in_use(tmp), True)
+        finally:
+            _release(handle)
+        check("浏览器退出后恢复可用", profile_in_use(tmp), False)
+    else:
+        print("  SKIP 独占共享模式模拟（仅 Windows）")
+
+    # 单实例锁：同名锁文件只能被拿一次
+    lock_path = tmp.parent / "app.lock"
+    first = SingleInstance(lock_path)
+    check("第一个实例拿到锁", first.acquire(), True)
+    second = SingleInstance(lock_path)
+    check("第二个实例拿不到锁", second.acquire(), False)
+    first.release()
+    check("释放后第二个实例可以拿到", second.acquire(), True)
+    second.release()
+    check("锁文件保留但可再次获取", SingleInstance(lock_path).acquire(), True)
+
+
 def main() -> int:
     print("=" * 62)
     print("XJTLU PDF Fetcher · 核心逻辑测试")
@@ -235,6 +300,7 @@ def main() -> int:
     test_filename()
     test_storage()
     test_paths()
+    test_guard()
 
     print("\n" + "=" * 62)
     print(f"通过 {len(PASSED)} 项，失败 {len(FAILED)} 项")

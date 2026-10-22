@@ -21,6 +21,7 @@ from tkinter import filedialog, messagebox, ttk
 from .collector import Collector, download_all  # noqa: F401
 from .config import Config
 from .detector import Candidate
+from .guard import ProfileBusyError, SingleInstance, single_instance_path
 from .paths import desktop_dir
 
 CHECKED = "☑"
@@ -338,6 +339,8 @@ class App(tk.Tk):
             self._collector = collector
             result = await collector.run()
             self.msg.put(("collected", result))
+        except ProfileBusyError as exc:
+            self.msg.put(("profile_busy", str(exc)))
         except Exception as exc:  # noqa: BLE001 - 错误要回显到界面
             self.msg.put(("error", f"收集失败：{type(exc).__name__}: {exc}"))
 
@@ -369,6 +372,8 @@ class App(tk.Tk):
                 should_stop=lambda: self._cancel,
             )
             self.msg.put(("downloaded", ok))
+        except ProfileBusyError as exc:
+            self.msg.put(("profile_busy", str(exc)))
         except Exception as exc:  # noqa: BLE001
             self.msg.put(("error", f"下载失败：{type(exc).__name__}: {exc}"))
 
@@ -440,6 +445,13 @@ class App(tk.Tk):
                     self._append_log(f"—— 下载完成：成功 {ok} 个 ——")
                     messagebox.showinfo("完成", f"成功下载 {ok} 个文件。")
 
+                elif kind == "profile_busy":
+                    self._phase = None
+                    self._collector = None
+                    self._set_busy(False, "浏览器被占用")
+                    self._append_log(str(payload))
+                    messagebox.showwarning("浏览器窗口还开着", str(payload))
+
                 elif kind == "error":
                     self._phase = None
                     self._collector = None
@@ -454,21 +466,67 @@ class App(tk.Tk):
 
     # ------------------------------------------------------------ 关闭
 
+    def _shutdown_browser(self) -> None:
+        """退出前把后台浏览器关掉。
+
+        不关的话 profile 会一直被那个浏览器进程占着，
+        下次启动必然报 TargetClosedError —— 这也是「打不开网页」的根因之一。
+        """
+        collector = self._collector
+        loop = self.worker.loop
+        if collector is None or loop is None:
+            return
+        try:
+            future = asyncio.run_coroutine_threadsafe(collector.aclose(), loop)
+            future.result(timeout=5)
+        except Exception:  # noqa: BLE001 - 退出流程里尽力而为
+            pass
+
     def _on_close(self) -> None:
         if self.busy and not messagebox.askokcancel("确认", "任务进行中，确定退出？"):
             return
+        self._shutdown_browser()
         try:
             self.worker.stop()
         finally:
             self.destroy()
 
 
-def main() -> int:
+def _warn_already_running() -> None:
+    """已经有一个实例在跑时的提示。
+
+    两个实例会抢同一个浏览器 profile：后启动的那个浏览器会被单例机制
+    直接顶掉（exitCode=0），表现成「收集失败」。
+    """
     try:
-        app = App()
-    except tk.TclError as exc:
-        print(f"无法启动图形界面：{exc}", file=sys.stderr)
-        print("可以用命令行模式：python main.py --help", file=sys.stderr)
-        return 1
-    app.mainloop()
-    return 0
+        root = tk.Tk()
+        root.withdraw()
+        messagebox.showwarning(
+            "已经在运行",
+            "「XJTLU 试卷下载器」已经有一个窗口在运行了。\n\n"
+            "请到任务栏切换到那个窗口。\n\n"
+            "不要同时开两个 —— 两个窗口会抢同一个浏览器 profile，谁都用不了。",
+        )
+        root.destroy()
+    except Exception:  # noqa: BLE001 - 没有图形环境时退回命令行提示
+        print("「XJTLU 试卷下载器」已经有一个实例在运行。", file=sys.stderr)
+
+
+def main() -> int:
+    # 单实例保护：必须在创建窗口之前拿到锁
+    lock = SingleInstance(single_instance_path())
+    if not lock.acquire():
+        _warn_already_running()
+        return 0
+
+    try:
+        try:
+            app = App()
+        except tk.TclError as exc:
+            print(f"无法启动图形界面：{exc}", file=sys.stderr)
+            print("可以用命令行模式：python main.py --help", file=sys.stderr)
+            return 1
+        app.mainloop()
+        return 0
+    finally:
+        lock.release()

@@ -22,7 +22,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from pdf_fetcher.collector import download_all  # noqa: E402
+from pdf_fetcher.collector import Collector, download_all  # noqa: E402
 from pdf_fetcher.config import Config  # noqa: E402
 from pdf_fetcher.detector import Candidate  # noqa: E402
 
@@ -192,6 +192,35 @@ async def run_tests(server: Server) -> None:
             check_true("不存在的文件应抛异常", False)
         except FileNotFoundError:
             check_true("不存在的文件应抛异常", True)
+
+    await check_profile_busy_message()
+
+
+async def check_profile_busy_message() -> None:
+    """profile 被占用时必须报「关掉浏览器窗口」，而不是「没装浏览器」。
+
+    这是真实踩过的坑：Chromium 对同一个 --user-data-dir 是单例的，
+    第二个进程启动后把命令转交给已有实例、自己 exitCode=0 退出，
+    Playwright 报 TargetClosedError —— 旧代码把它翻译成「没装 Edge/Chrome」。
+    """
+    from pdf_fetcher import collector as collector_mod
+    from pdf_fetcher.guard import ProfileBusyError
+
+    print("\n[profile 被占用时的提示]")
+    original = collector_mod.profile_in_use
+    collector_mod.profile_in_use = lambda *_a, **_k: True
+    try:
+        cfg = Config(headless=True)
+        try:
+            await Collector(cfg).run()
+            check_true("应当抛 ProfileBusyError", False)
+        except ProfileBusyError as exc:
+            text = str(exc)
+            check_true("是 ProfileBusyError", True)
+            check_true("提示关窗口", "关掉" in text)
+            check_true("不误报没装浏览器", "没有 Microsoft Edge" not in text)
+    finally:
+        collector_mod.profile_in_use = original
 
 
 def main() -> int:

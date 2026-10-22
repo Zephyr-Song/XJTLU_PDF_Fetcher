@@ -10,6 +10,7 @@ from pathlib import Path
 from .collector import Collector, download_all
 from .config import Config
 from .detector import Candidate, extract_filename
+from .guard import ProfileBusyError
 from .storage import save_bytes
 
 
@@ -150,6 +151,10 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         print("\n已中断。")
         return 130
+    except ProfileBusyError as exc:
+        # 这是「能自救」的错误，单独处理，不要糊上 traceback
+        print(f"\n{exc}", file=sys.stderr)
+        return 2
     except Exception as exc:  # noqa: BLE001
         print(f"\n错误: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 1
