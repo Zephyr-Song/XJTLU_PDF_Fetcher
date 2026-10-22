@@ -194,6 +194,38 @@ async def run_tests(server: Server) -> None:
             check_true("不存在的文件应抛异常", True)
 
     await check_profile_busy_message()
+    await check_end_collect_path()
+
+
+async def check_end_collect_path() -> None:
+    """GUI 的「■ 结束收集」走 Collector.aclose()，run() 必须正常收敛。
+
+    回归点：aclose 关掉 context 后，等待浏览器关闭的循环要能识别
+    TargetClosedError 并正常返回，否则收集会卡住或报失败。
+    """
+    from pdf_fetcher.collector import Collector
+
+    print("\n[结束收集：aclose 后 run 应正常收敛]")
+    with tempfile.TemporaryDirectory() as tmp:
+        cfg = Config(
+            profile_dir=Path(tmp) / "p",
+            headless=True,
+            start_url="about:blank",
+        )
+        collector = Collector(cfg)
+        task = asyncio.ensure_future(collector.run())
+        await asyncio.sleep(3)          # 等浏览器真正起来
+        await collector.aclose()
+        try:
+            items = await asyncio.wait_for(task, timeout=20)
+            check_true("aclose 后 run 正常返回列表", isinstance(items, list))
+        except (asyncio.TimeoutError, Exception) as exc:  # noqa: BLE001
+            check_true(f"aclose 后 run 正常返回列表（{type(exc).__name__}）", False)
+
+        # 收尾后 profile 不应再被占用
+        from pdf_fetcher.guard import profile_in_use
+
+        check("收尾后 profile 已释放", profile_in_use(cfg.resolved_profile_dir), False)
 
 
 async def check_profile_busy_message() -> None:

@@ -36,6 +36,24 @@ jobs:
       - name: Build EXE
         run: pyinstaller build_exe.spec --noconfirm
 
+      - name: Smoke test the built EXE
+        # 单元测试发现不了「模块没被打进包」这类问题 —— 那要等运行时才炸
+        # （Could not load PyInstaller's embedded PKG archive）。
+        # 所以这里真跑一次打包产物：exe 以 --selftest 模式自检，
+        # 结果写进文件，退出码 0 = 全部通过。
+        # 失败不阻断发版（continue-on-error），只当告警。
+        if: runner.os == 'windows'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $exe = "dist\XJTLU_PDF_Fetcher.exe"
+          if (-not (Test-Path $exe)) { Write-Host "SMOKE: 找不到 exe"; exit 1 }
+          $p = Start-Process -FilePath $exe -ArgumentList "--selftest","--selftest-out","selftest.txt" -PassThru -Wait
+          Write-Host "SMOKE: 退出码 $($p.ExitCode)"
+          if (Test-Path "selftest.txt") { Get-Content "selftest.txt" }
+          if ($p.ExitCode -ne 0) { Write-Host "SMOKE FAIL: 自检未通过"; exit 1 }
+          Write-Host "SMOKE OK"
+
       # ---------------- 代码签名（可选，未配置时自动跳过） ----------------
 
       - name: Upload unsigned EXE for signing

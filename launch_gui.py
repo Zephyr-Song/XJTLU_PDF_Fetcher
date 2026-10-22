@@ -1,13 +1,14 @@
 """双击即可用的图形界面入口（给 PyInstaller 打包成 exe 用）。
 
-只做一件事：启动 Tkinter 图形界面。不需要命令行参数，
-也不需要控制台窗口。打包时 PyInstaller 以本文件为入口，
-普通用户双击 exe 就能直接进入 GUI。
+默认行为：启动 Tkinter 图形界面。不需要命令行参数，也不需要控制台窗口。
+打包时 PyInstaller 以本文件为入口，普通用户双击 exe 就能直接进入 GUI。
+
+也支持一个自检模式（给 CI 和排障用）：
+    XJTLU_PDF_Fetcher.exe --selftest --selftest-out result.txt
+不打开任何窗口，把关键路径跑一遍，用退出码表达成败。
 """
 
 import sys
-
-from pdf_fetcher.gui import main
 
 if __name__ == "__main__":
     if sys.platform == "win32":
@@ -17,4 +18,12 @@ if __name__ == "__main__":
             sys.stderr.reconfigure(encoding="utf-8", errors="replace")
         except Exception:
             pass
-    sys.exit(main())
+
+    if "--selftest" in sys.argv:
+        from pdf_fetcher.selftest import main as selftest_main
+
+        sys.exit(selftest_main())
+    else:
+        from pdf_fetcher.gui import main as gui_main
+
+        sys.exit(gui_main())
