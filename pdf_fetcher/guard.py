@@ -21,7 +21,9 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
+import time
 from pathlib import Path
 
 from .paths import default_profile_dir
@@ -91,55 +93,96 @@ def busy_hint(profile_dir: Path | str | None = None) -> str:
 class SingleInstance:
     """跨进程的「只允许一个实例」锁。
 
-    用操作系统文件锁实现，进程退出（包括崩溃）时由系统自动释放，
-    不会留下需要手工清理的死锁文件。
+    Windows 用**命名互斥量（named mutex）**实现 —— 这是 Windows 上最可靠的
+    单实例原语，不依赖文件共享语义，因此不会因为杀软、网络盘、或 PyInstaller
+    单文件解压到不同临时目录而失效（旧版用 msvcrt.locking 锁文件，在真实
+    双击/解压场景下会出现「两个实例都拿到锁」的竞态）。
+
+    POSIX 仍用 fcntl 文件锁（行为稳定）。进程退出（含崩溃）由系统自动释放。
     """
 
+    # Windows 互斥量名：Local\\ 限定在当前会话，避免机器级冲突
+    _WIN_NAME = "Local\\XJTLU_PDF_Fetcher_SingleInstance"
+
     def __init__(self, path: Path | str) -> None:
+        # path 仅 POSIX 下作为锁文件使用；Windows 用固定互斥量名
         self.path = Path(path)
-        self._fd: int | None = None
+        self._handle = None  # Windows 互斥量句柄
+        self._fd: int | None = None  # POSIX 文件描述符
 
     def acquire(self) -> bool:
         """尝试加锁。成功返回 True；已被别的实例占用返回 False。"""
+        if sys.platform == "win32":
+            return self._acquire_win()
+        return self._acquire_posix()
+
+    def _acquire_win(self) -> bool:
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CreateMutexW.restype = wintypes.HANDLE
+        kernel32.CreateMutexW.argtypes = [
+            wintypes.LPVOID,
+            wintypes.BOOL,
+            wintypes.LPCWSTR,
+        ]
+        kernel32.GetLastError.restype = wintypes.DWORD
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+
+        handle = kernel32.CreateMutexW(None, True, self._WIN_NAME)
+        if not handle:
+            return False
+        # ERROR_ALREADY_EXISTS = 183：已有一个实例持有同名互斥量
+        if ctypes.get_last_error() == 183:
+            kernel32.CloseHandle(handle)
+            return False
+        self._handle = handle
+        return True
+
+    def _acquire_posix(self) -> bool:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         fd = os.open(self.path, os.O_RDWR | os.O_CREAT, 0o644)
         try:
-            if sys.platform == "win32":
-                import msvcrt
+            import fcntl
 
-                msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
-            else:
-                import fcntl
-
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
             os.close(fd)
             return False
-
         self._fd = fd
-        try:
-            os.lseek(fd, 0, os.SEEK_SET)
-            os.truncate(fd, 0)
-            os.write(fd, str(os.getpid()).encode("ascii"))
-        except OSError:
-            pass
         return True
 
     def release(self) -> None:
+        if sys.platform == "win32":
+            handle = self._handle
+            self._handle = None
+            if handle is not None:
+                try:
+                    import ctypes
+                    from ctypes import wintypes
+
+                    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+                    kernel32.ReleaseMutex.argtypes = [wintypes.HANDLE]
+                    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+                    kernel32.ReleaseMutex(handle)
+                except OSError:
+                    pass
+                finally:
+                    try:
+                        ctypes.windll.kernel32.CloseHandle(handle)  # noqa: B018
+                    except Exception:
+                        pass
+            return
+
         fd = self._fd
         if fd is None:
             return
         self._fd = None
         try:
-            if sys.platform == "win32":
-                import msvcrt
+            import fcntl
 
-                os.lseek(fd, 0, os.SEEK_SET)
-                msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
-            else:
-                import fcntl
-
-                fcntl.flock(fd, fcntl.LOCK_UN)
+            fcntl.flock(fd, fcntl.LOCK_UN)
         except OSError:
             pass
         finally:
@@ -156,5 +199,54 @@ class SingleInstance:
 
 
 def single_instance_path() -> Path:
-    """单实例锁文件位置：和 profile 同级，避开需要管理员权限的目录。"""
+    """单实例锁文件位置（仅 POSIX 使用；Windows 用命名互斥量）。"""
     return default_profile_dir().parent / "app.lock"
+
+
+def kill_browser_using_profile(profile_dir: Path | str | None = None) -> int:
+    """杀掉所有正在使用本程序 profile 的浏览器进程。
+
+    本程序的 profile 目录是**专用的**（不会和用户的日常浏览器冲突），
+    所以任何挂在这个 profile 上的浏览器进程都只能是本程序遗留的孤儿进程，
+    安全可杀。返回「尝试结束的进程数」（best-effort）。
+
+    典型场景：上次收集时浏览器窗口没正常关掉（或程序崩溃），这个进程会一直
+    占着 profile 的 lockfile，导致下次一点「开始收集」就报「浏览器窗口还开着」
+    却又找不到窗口在哪 —— 这里直接帮用户清理掉。
+    """
+    profile = Path(profile_dir) if profile_dir else default_profile_dir()
+    if sys.platform != "win32":
+        # POSIX：SingletonLock 是个指向 "hostname-pid" 的符号链接
+        try:
+            target = os.readlink(profile / "SingletonLock")
+        except OSError:
+            return 0
+        pid = target.rsplit("-", 1)[-1]
+        if not pid.isdigit():
+            return 0
+        try:
+            os.kill(int(pid), 9)
+            return 1
+        except OSError:
+            return 0
+
+    # Windows：按命令行精确匹配本程序 profile 路径，避免误杀用户的正常浏览器
+    marker = str(profile).replace("/", "\\")
+    ps = (
+        "Get-CimInstance Win32_Process -Filter \"Name='msedge.exe' OR Name='chrome.exe'\""
+        f" | Where-Object {{ $_.CommandLine -like '*{marker}*' }}"
+        " | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
+    )
+    try:
+        subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
+            check=False,
+            capture_output=True,
+            timeout=30,
+        )
+    except Exception:  # noqa: BLE001 - 清理失败不阻塞主流程
+        return 0
+    # 给一点时间让进程退出、释放 lockfile
+    time.sleep(1.0)
+    return 1
+

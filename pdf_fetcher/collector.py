@@ -23,6 +23,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 
 from playwright.async_api import BrowserContext, Error as PlaywrightError
@@ -35,7 +36,12 @@ from .detector import (
     is_real_pdf,
     looks_like_pdf_response,
 )
-from .guard import ProfileBusyError, busy_hint, profile_in_use
+from .guard import (
+    ProfileBusyError,
+    busy_hint,
+    kill_browser_using_profile,
+    profile_in_use,
+)
 from .storage import human_size, save_bytes
 
 try:  # 新版 Playwright 单独导出了这个异常类型
@@ -112,7 +118,15 @@ async def _launch_context(playwright, config: Config) -> tuple[BrowserContext, s
     """
     profile = config.resolved_profile_dir
     if profile_in_use(profile):
-        raise ProfileBusyError(busy_hint(profile))
+        # 本程序的 profile 是专用的，残留的浏览器进程一定是上一次遗留的孤儿，
+        # 直接帮用户杀掉（仍是同一个 profile，登录态在磁盘上不会丢），
+        # 免得弹出「浏览器窗口还开着」却找不到窗口在哪 —— 这正是「打不开网页」的根因。
+        killed = kill_browser_using_profile(profile)
+        if killed:
+            await asyncio.sleep(1.5)
+        if profile_in_use(profile):
+            # 杀不掉（比如被别的进程以独占方式锁死）才退回到人工提示
+            raise ProfileBusyError(busy_hint(profile))
 
     errors: list[str] = []
     missing: list[str] = []
